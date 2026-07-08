@@ -6,13 +6,16 @@
 
 FROM node:22-alpine AS build
 
+# Large Vite/Rollup graphs (15k+ modules) exceed Node's default ~2 GiB heap during chunk rendering.
+ENV NODE_OPTIONS="--max-old-space-size=6144"
+
 WORKDIR /armonia
 
 COPY armonia ./
 
 RUN npm i
 
-RUN npm run build
+RUN npm run build && rm -rf node_modules
 
 WORKDIR /sinfonia
 
