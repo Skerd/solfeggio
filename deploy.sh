@@ -38,8 +38,10 @@ MONGO_CLUSTER_DIR="${SCRIPT_DIR}/clusters/mongo"
 CLAMAV_CLUSTER_DIR="${SCRIPT_DIR}/clusters/clamv"
 NGINX_CLUSTER_DIR="${SCRIPT_DIR}/clusters/nginx"
 MAESTRO_ENV_FILE="${SCRIPT_DIR}/apps/maestro/.env"
-MAESTRO_KAFKA_CERTS_DIR="${MAESTRO_DIR}/secrets/certificates/kafka"
-MAESTRO_MONGO_CERTS_DIR="${MAESTRO_DIR}/secrets/certificates/mongo"
+MAESTRO_SECRETS_SRC="${SCRIPT_DIR}/apps/maestro/secrets"
+MAESTRO_SECRETS_DIR="${MAESTRO_DIR}/secrets"
+MAESTRO_KAFKA_CERTS_DIR="${MAESTRO_SECRETS_DIR}/certificates/kafka"
+MAESTRO_MONGO_CERTS_DIR="${MAESTRO_SECRETS_DIR}/certificates/mongo"
 DEFAULT_BRANCH="main"
 DEFAULT_INTERNAL_NETWORK="arpeggio_internal_network"
 MAESTRO_API_CONTAINER="maestroApi"
@@ -772,6 +774,22 @@ setup_mandatory_nginx_gateway() {
     print_status "Start the gateway with: cd ${NGINX_CLUSTER_DIR} && docker-compose up -d"
 }
 
+copy_maestro_secrets_to_deploy() {
+    if [ ! -d "$MAESTRO_SECRETS_SRC" ]; then
+        print_warning "Maestro secrets source not found: ${MAESTRO_SECRETS_SRC}"
+        return 0
+    fi
+
+    if [ -z "$(ls -A "$MAESTRO_SECRETS_SRC" 2>/dev/null)" ]; then
+        print_status "Maestro secrets source is empty, skipping copy"
+        return 0
+    fi
+
+    mkdir -p "$MAESTRO_SECRETS_DIR"
+    cp -R "${MAESTRO_SECRETS_SRC}/." "$MAESTRO_SECRETS_DIR/"
+    print_status "Copied Maestro secrets to ${MAESTRO_SECRETS_DIR}"
+}
+
 copy_maestro_env_to_deploy() {
     local dest_file="${MAESTRO_DIR}/.env"
 
@@ -1248,6 +1266,7 @@ setup_mandatory_mongodb
 
 setup_mandatory_nginx_gateway
 
+copy_maestro_secrets_to_deploy
 copy_maestro_env_to_deploy
 
 print_deploy_summary

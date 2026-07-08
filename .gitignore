@@ -25,3 +25,4 @@
 /clusters/kafka/scripts/
 /clusters/kafka/secrets/
 /deploy/
+/apps/maestro/secrets/
