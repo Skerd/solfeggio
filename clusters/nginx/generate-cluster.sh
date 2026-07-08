@@ -310,7 +310,10 @@ server {
 
     # ---------------- WEBSOCKETS ----------------
     location /ws/ {
-        proxy_pass http://maestroWebsocket;
+        # Trailing slash strips the /ws/ prefix before forwarding (same as
+        # sinfonia vite dev proxy rewrite). Without it the WS server receives
+        # /ws/{token}/{lang} and treats "ws" as the JWT.
+        proxy_pass http://maestroWebsocket/;
 
         proxy_http_version 1.1;
 
