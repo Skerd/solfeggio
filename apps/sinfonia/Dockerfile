@@ -15,7 +15,7 @@ COPY armonia ./
 
 RUN npm i
 
-RUN npm run build && rm -rf node_modules
+RUN npm run build
 
 WORKDIR /sinfonia
 
