@@ -259,6 +259,38 @@ build_sinfonia_image() {
     print_status "Sinfonia image built successfully"
 }
 
+validate_cluster_bind_mounts() {
+    local cluster_dir="$1"
+    local compose_file="${cluster_dir}/docker-compose.yml"
+    local line host_path abs_path base_name
+    local failed=0
+
+    while IFS= read -r line; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line#- }"
+        host_path="${line%%:*}"
+        host_path="${host_path#./}"
+
+        base_name="$(basename "$host_path")"
+        if [[ "$base_name" != *.* ]]; then
+            continue
+        fi
+
+        abs_path="${cluster_dir}/${host_path}"
+        if [ -d "$abs_path" ]; then
+            print_error "Bind mount path is a directory, expected a file: ${abs_path}"
+            print_error "Fix: cd ${cluster_dir} && rm -rf \"${host_path}\" && ./generate-cluster.sh"
+            failed=1
+        elif [ ! -f "$abs_path" ]; then
+            print_error "Missing bind mount file: ${abs_path}"
+            print_error "Fix: cd ${cluster_dir} && ./generate-cluster.sh"
+            failed=1
+        fi
+    done < <(grep -E '^\s+- \./[^:]+:' "$compose_file" 2>/dev/null || true)
+
+    return "$failed"
+}
+
 start_cluster_if_generated() {
     local label="$1"
     local cluster_dir="$2"
@@ -267,6 +299,11 @@ start_cluster_if_generated() {
     if [ ! -f "$compose_file" ]; then
         print_status "Skipping ${label}: no generated docker-compose.yml"
         return 0
+    fi
+
+    if ! validate_cluster_bind_mounts "$cluster_dir"; then
+        print_error "Skipping ${label}: bind mount validation failed"
+        return 1
     fi
 
     echo ""
@@ -291,7 +328,9 @@ start_infrastructure_clusters() {
     for cluster_spec in "${INFRA_CLUSTER_START_ORDER[@]}"; do
         label="${cluster_spec%%|*}"
         cluster_dir="${cluster_spec#*|}"
-        start_cluster_if_generated "$label" "$cluster_dir"
+        if ! start_cluster_if_generated "$label" "$cluster_dir"; then
+            print_warning "${label} was not started due to validation errors"
+        fi
     done
 }
 
@@ -301,7 +340,9 @@ start_gateway_cluster() {
     echo -e "${BLUE}                 Starting Nginx gateway${NC}"
     echo -e "${BLUE}================================================================${NC}"
 
-    start_cluster_if_generated "Nginx gateway" "$NGINX_CLUSTER_DIR"
+    if ! start_cluster_if_generated "Nginx gateway" "$NGINX_CLUSTER_DIR"; then
+        print_warning "Nginx gateway was not started due to validation errors"
+    fi
 }
 
 start_full_stack() {

@@ -18,6 +18,17 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Docker creates a directory when a bind-mounted file path is missing.
+# Remove those paths so config generation can write real files.
+ensure_regular_file_path() {
+    local path="$1"
+
+    if [ -d "$path" ]; then
+        print_warning "Removing directory at ${path} (expected a config file — likely created by Docker on a prior failed start)"
+        rm -rf "$path"
+    fi
+}
+
 # Load environment variables from .env file if it exists
 if [ -f .env ]; then
     export $(grep -v '^#' .env | xargs)
@@ -335,6 +346,7 @@ generate_sentinel_configs() {
     # Generate Sentinel configuration for each Sentinel node
     for sentinel_id in $(seq 1 $num_sentinels); do
         print_status " 2. Creating ${GREEN}sentinel-${sentinel_id}.conf${NC}"
+        ensure_regular_file_path "scripts/sentinel-${sentinel_id}.conf"
         cat > scripts/sentinel-${sentinel_id}.conf << EOF
 port 26379
 dir /data
@@ -379,6 +391,7 @@ generate_redis_configs() {
     # Generate Redis master configurations
     for master_id in $(seq 1 $num_masters); do
         print_status " 2. Creating ${GREEN}redis-master-${master_id}.conf${NC}"
+        ensure_regular_file_path "scripts/redis-master-${master_id}.conf"
         cat > scripts/redis-master-${master_id}.conf << EOF
 # Redis Master Configuration
 port 6379
@@ -446,6 +459,7 @@ EOF
     for master_id in $(seq 1 $num_masters); do
         for replica_id in $(seq 1 $num_replicas); do
             print_status " 3. Creating ${GREEN}redis-replica-${master_id}-${replica_id}.conf${NC}"
+            ensure_regular_file_path "scripts/redis-replica-${master_id}-${replica_id}.conf"
             cat > scripts/redis-replica-${master_id}-${replica_id}.conf << EOF
 # Redis Replica Configuration
 port 6379
