@@ -129,6 +129,24 @@ set_env_var() {
     mv "$tmp" "$file"
 }
 
+cluster_is_generated() {
+    local cluster_dir="$1"
+    [ -f "${cluster_dir}/docker-compose.yml" ]
+}
+
+parse_nginx_external_port() {
+    local compose_file="${NGINX_CLUSTER_DIR}/docker-compose.yml"
+    local port
+
+    if [ ! -f "$compose_file" ]; then
+        echo "80"
+        return 0
+    fi
+
+    port="$(grep -m1 -E '^\s+-\s+"[0-9]+:[0-9]+"' "$compose_file" | sed -E 's/.*"([0-9]+):[0-9]+".*/\1/')"
+    echo "${port:-80}"
+}
+
 configure_cluster_network_env_files() {
     local cluster_dir env_file
 
@@ -255,6 +273,11 @@ configure_maestro_kafka_enabled() {
 }
 
 prompt_kafka_activation() {
+    if cluster_is_generated "$KAFKA_CLUSTER_DIR"; then
+        print_status "Kafka cluster already generated at ${KAFKA_CLUSTER_DIR}, activating automatically"
+        return 0
+    fi
+
     echo ""
     echo -e "${BLUE}================================================================${NC}"
     echo -e "Kafka activation"
@@ -287,6 +310,11 @@ prompt_kafka_activation() {
 
 setup_kafka_cluster() {
     local generate_script="${KAFKA_CLUSTER_DIR}/generate-cluster.sh"
+
+    if cluster_is_generated "$KAFKA_CLUSTER_DIR"; then
+        print_status "Kafka cluster already generated, skipping generator"
+        return 0
+    fi
 
     if [ ! -x "$generate_script" ]; then
         chmod +x "$generate_script"
@@ -382,6 +410,11 @@ configure_maestro_redis_enabled() {
 }
 
 prompt_redis_activation() {
+    if cluster_is_generated "$REDIS_CLUSTER_DIR"; then
+        print_status "Redis cluster already generated at ${REDIS_CLUSTER_DIR}, activating automatically"
+        return 0
+    fi
+
     echo ""
     echo -e "${BLUE}================================================================${NC}"
     echo -e "Redis activation"
@@ -414,6 +447,11 @@ prompt_redis_activation() {
 
 setup_redis_cluster() {
     local generate_script="${REDIS_CLUSTER_DIR}/generate-cluster.sh"
+
+    if cluster_is_generated "$REDIS_CLUSTER_DIR"; then
+        print_status "Redis cluster already generated, skipping generator"
+        return 0
+    fi
 
     if [ ! -x "$generate_script" ]; then
         chmod +x "$generate_script"
@@ -525,6 +563,11 @@ configure_maestro_mongo_enabled() {
 setup_mongo_cluster() {
     local generate_script="${MONGO_CLUSTER_DIR}/generate-cluster.sh"
 
+    if cluster_is_generated "$MONGO_CLUSTER_DIR"; then
+        print_status "MongoDB cluster already generated, skipping generator"
+        return 0
+    fi
+
     if [ ! -x "$generate_script" ]; then
         chmod +x "$generate_script"
     fi
@@ -549,11 +592,16 @@ setup_mandatory_mongodb() {
     echo -e "MongoDB setup (required)"
     echo -e "${BLUE}================================================================${NC}"
     echo ""
-    echo "MongoDB is the primary database. Deployment cannot continue without it."
-    echo ""
-    echo "The following will be configured:"
-    show_mongo_enabled_features
-    echo ""
+
+    if cluster_is_generated "$MONGO_CLUSTER_DIR"; then
+        print_status "Using existing MongoDB cluster at ${MONGO_CLUSTER_DIR}"
+    else
+        echo "MongoDB is the primary database. Deployment cannot continue without it."
+        echo ""
+        echo "The following will be configured:"
+        show_mongo_enabled_features
+        echo ""
+    fi
 
     setup_mongo_cluster
     configure_maestro_mongo_enabled
@@ -731,11 +779,16 @@ configure_nginx_cluster_env() {
 setup_nginx_gateway() {
     local generate_script="${NGINX_CLUSTER_DIR}/generate-cluster.sh"
 
+    configure_nginx_cluster_env
+
+    if cluster_is_generated "$NGINX_CLUSTER_DIR"; then
+        print_status "Nginx gateway already generated, skipping generator"
+        return 0
+    fi
+
     if [ ! -x "$generate_script" ]; then
         chmod +x "$generate_script"
     fi
-
-    configure_nginx_cluster_env
 
     print_status "Running Nginx gateway cluster generator"
     (
@@ -767,9 +820,17 @@ configure_maestro_nginx_gateway() {
 }
 
 setup_mandatory_nginx_gateway() {
-    prompt_nginx_gateway_settings
-    setup_nginx_gateway
-    configure_maestro_nginx_gateway
+    if cluster_is_generated "$NGINX_CLUSTER_DIR"; then
+        print_status "Using existing Nginx gateway at ${NGINX_CLUSTER_DIR}"
+        NGINX_EXTERNAL_PORT="$(parse_nginx_external_port)"
+        setup_nginx_gateway
+        configure_maestro_nginx_gateway
+    else
+        prompt_nginx_gateway_settings
+        setup_nginx_gateway
+        configure_maestro_nginx_gateway
+    fi
+
     print_status "Nginx gateway configuration completed"
     print_status "Start the gateway with: cd ${NGINX_CLUSTER_DIR} && docker-compose up -d"
 }
@@ -981,6 +1042,11 @@ print_deploy_summary() {
 }
 
 prompt_clamav_activation() {
+    if cluster_is_generated "$CLAMAV_CLUSTER_DIR"; then
+        print_status "ClamAV cluster already generated at ${CLAMAV_CLUSTER_DIR}, activating automatically"
+        return 0
+    fi
+
     echo ""
     echo -e "${BLUE}================================================================${NC}"
     echo -e "ClamAV activation"
@@ -1013,6 +1079,11 @@ prompt_clamav_activation() {
 
 setup_clamav_cluster() {
     local generate_script="${CLAMAV_CLUSTER_DIR}/generate-cluster.sh"
+
+    if cluster_is_generated "$CLAMAV_CLUSTER_DIR"; then
+        print_status "ClamAV cluster already generated, skipping generator"
+        return 0
+    fi
 
     if [ ! -x "$generate_script" ]; then
         chmod +x "$generate_script"

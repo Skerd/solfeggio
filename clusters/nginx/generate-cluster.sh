@@ -261,6 +261,9 @@ server {
     listen ${NGINX_LISTEN_PORT};
     server_name _;
 
+    # Applies to all locations (media has a more specific block than /api/)
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+
     # ---------------- GLOBAL PROXY SETTINGS ----------------
     proxy_http_version 1.1;
 
@@ -294,12 +297,11 @@ server {
     # ---------------- API ----------------
     location /api/ {
         proxy_pass http://api;
-        client_max_body_size ${CLIENT_MAX_BODY_SIZE};
 
         proxy_buffering off;
     }
 
-    # ---------------- MEDIA (IMPORTANT FIX) ----------------
+    # ---------------- MEDIA ----------------
     location /api/auxiliary/media/ {
         proxy_pass http://api;
 
