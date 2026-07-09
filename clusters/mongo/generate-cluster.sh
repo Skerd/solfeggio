@@ -34,6 +34,28 @@ if [ -z "$APP_USERNAME" ] || [ -z "$APP_PASSWORD" ] || [ -z "$COLLECTION_NAME" ]
 fi
 
 DOCKER_INTERNAL_NETWORK="${DOCKER_INTERNAL_NETWORK:-arpeggio_internal_network}"
+# Comma-separated extra IPs to include in every cert SAN (e.g. public host IP for external TLS clients)
+TLS_EXTRA_SAN_IPS="${TLS_EXTRA_SAN_IPS:-}"
+
+append_extra_san_ips() {
+    local conf_file="$1"
+    local ip_index=2
+    local ip
+
+    if [ -z "$TLS_EXTRA_SAN_IPS" ]; then
+        return 0
+    fi
+
+    IFS=',' read -r -a extra_ips <<< "$TLS_EXTRA_SAN_IPS"
+    for ip in "${extra_ips[@]}"; do
+        ip="$(echo "$ip" | xargs)"
+        if [ -n "$ip" ]; then
+            echo "IP.${ip_index} = ${ip}" >> "$conf_file"
+            ip_index=$((ip_index + 1))
+        fi
+    done
+}
+
 validate_number() {
     local num=$1
     local min=$2
@@ -127,6 +149,7 @@ DNS.1 = ${hostname}
 DNS.2 = localhost
 IP.1 = 127.0.0.1
 EOF
+        append_extra_san_ips "certs/${hostname}-ext.cnf"
 
         openssl x509 -req -in certs/${hostname}.csr.pem -CA certs/ca.crt.pem -CAkey certs/ca.key.pem -CAcreateserial -out certs/${hostname}.crt.pem -days 365 -sha256 -extfile certs/${hostname}-ext.cnf > /dev/null 2>&1
 
