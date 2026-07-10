@@ -56,6 +56,25 @@ MAESTRO_CRON_CONTAINER="maestroCron"
 SINFONIA_FRONTEND_CONTAINER="frontend"
 
 STARTED_CLUSTERS=()
+DOCKER_BUILD_NO_CACHE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --no-cache)
+            DOCKER_BUILD_NO_CACHE=true
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--no-cache]"
+            echo "  --no-cache  Build Maestro and Sinfonia images without Docker layer cache"
+            exit 0
+            ;;
+        *)
+            print_error "Unknown argument: $arg"
+            echo "Usage: $0 [--no-cache]"
+            exit 1
+            ;;
+    esac
+done
 
 read_env_value() {
     local file="$1"
@@ -232,10 +251,13 @@ build_maestro_image() {
     print_status "Dockerfile: ${MAESTRO_DOCKERFILE}"
     print_status "Context: ${DEPLOY_DIR}"
 
-    docker build \
-        -f "$MAESTRO_DOCKERFILE" \
-        -t "$MAESTRO_IMAGE" \
-        "$DEPLOY_DIR"
+    local build_args=(-f "$MAESTRO_DOCKERFILE" -t "$MAESTRO_IMAGE")
+    if [ "$DOCKER_BUILD_NO_CACHE" = "true" ]; then
+        build_args+=(--no-cache)
+        print_status "Building without cache (--no-cache)"
+    fi
+
+    docker build "${build_args[@]}" "$DEPLOY_DIR"
 
     print_status "Maestro image built successfully"
 }
@@ -251,10 +273,13 @@ build_sinfonia_image() {
     print_status "Dockerfile: ${SINFONIA_DOCKERFILE}"
     print_status "Context: ${DEPLOY_DIR}"
 
-    docker build \
-        -f "$SINFONIA_DOCKERFILE" \
-        -t "$FRONTEND_IMAGE" \
-        "$DEPLOY_DIR"
+    local build_args=(-f "$SINFONIA_DOCKERFILE" -t "$FRONTEND_IMAGE")
+    if [ "$DOCKER_BUILD_NO_CACHE" = "true" ]; then
+        build_args+=(--no-cache)
+        print_status "Building without cache (--no-cache)"
+    fi
+
+    docker build "${build_args[@]}" "$DEPLOY_DIR"
 
     print_status "Sinfonia image built successfully"
 }
