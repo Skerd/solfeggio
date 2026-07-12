@@ -81,6 +81,8 @@ Validates the prepared `deploy/` folder, then:
 | `maestroKafka` | `npm run kafka` | Kafka consumers |
 | `maestroWebsocket` | `npm run websocket` | WebSocket server |
 | `maestroCron` | `npm run cron` | Scheduled jobs |
+| `maestroAssistant` | `npm run assistant` | AI-channel responder |
+| `maestroTelegram` | `npm run telegram` | Telegram bot long-poll + linking |
 
 **Frontend container:**
 

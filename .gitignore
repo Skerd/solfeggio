@@ -14,6 +14,9 @@
 /clusters/clamv/.env
 /clusters/clamv/scripts/
 /clusters/clamv/docker-compose.yml
+/clusters/ollama/.env
+/clusters/ollama/scripts/
+/clusters/ollama/docker-compose.yml
 /clusters/nginx/.env
 /clusters/nginx/conf/
 /clusters/nginx/scripts/

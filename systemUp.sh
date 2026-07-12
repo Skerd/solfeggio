@@ -34,11 +34,12 @@ FRONTEND_COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.frontend.yml"
 SERVERS_COMPOSE_PROJECT="servers"
 FRONTEND_COMPOSE_PROJECT="frontend"
 COMPOSE_NETWORK_KEY="arpeggio-internal"
-CLUSTER_ENV_CANDIDATES=(nginx mongo kafka redis clamv prometheus)
+CLUSTER_ENV_CANDIDATES=(nginx mongo kafka redis clamv ollama prometheus)
 KAFKA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/kafka"
 REDIS_CLUSTER_DIR="${SCRIPT_DIR}/clusters/redis"
 MONGO_CLUSTER_DIR="${SCRIPT_DIR}/clusters/mongo"
 CLAMAV_CLUSTER_DIR="${SCRIPT_DIR}/clusters/clamv"
+OLLAMA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/ollama"
 NGINX_CLUSTER_DIR="${SCRIPT_DIR}/clusters/nginx"
 PROMETHEUS_CLUSTER_DIR="${SCRIPT_DIR}/clusters/prometheus"
 INFRA_CLUSTER_START_ORDER=(
@@ -46,6 +47,7 @@ INFRA_CLUSTER_START_ORDER=(
     "Redis|${REDIS_CLUSTER_DIR}"
     "Kafka|${KAFKA_CLUSTER_DIR}"
     "ClamAV|${CLAMAV_CLUSTER_DIR}"
+    "Ollama|${OLLAMA_CLUSTER_DIR}"
     "Prometheus|${PROMETHEUS_CLUSTER_DIR}"
 )
 
@@ -53,6 +55,8 @@ MAESTRO_API_CONTAINER="maestroApi"
 MAESTRO_KAFKA_CONTAINER="maestroKafka"
 MAESTRO_WEBSOCKET_CONTAINER="maestroWebsocket"
 MAESTRO_CRON_CONTAINER="maestroCron"
+MAESTRO_ASSISTANT_CONTAINER="maestroAssistant"
+MAESTRO_TELEGRAM_CONTAINER="maestroTelegram"
 SINFONIA_FRONTEND_CONTAINER="frontend"
 
 STARTED_CLUSTERS=()
@@ -439,6 +443,34 @@ services:
       - ${COMPOSE_NETWORK_KEY}
     restart: unless-stopped
 
+  ${MAESTRO_ASSISTANT_CONTAINER}:
+    image: ${MAESTRO_IMAGE}
+    container_name: ${MAESTRO_ASSISTANT_CONTAINER}
+    hostname: ${MAESTRO_ASSISTANT_CONTAINER}
+    working_dir: /maestro
+    command: ["npm", "run", "assistant"]
+    env_file:
+      - ./maestro/.env
+    volumes:
+      - ./maestro/secrets:/maestro/secrets:ro
+    networks:
+      - ${COMPOSE_NETWORK_KEY}
+    restart: unless-stopped
+
+  ${MAESTRO_TELEGRAM_CONTAINER}:
+    image: ${MAESTRO_IMAGE}
+    container_name: ${MAESTRO_TELEGRAM_CONTAINER}
+    hostname: ${MAESTRO_TELEGRAM_CONTAINER}
+    working_dir: /maestro
+    command: ["npm", "run", "telegram"]
+    env_file:
+      - ./maestro/.env
+    volumes:
+      - ./maestro/secrets:/maestro/secrets:ro
+    networks:
+      - ${COMPOSE_NETWORK_KEY}
+    restart: unless-stopped
+
 networks:
   ${COMPOSE_NETWORK_KEY}:
     external: true
@@ -520,6 +552,8 @@ print_system_up_summary() {
     echo "  - Kafka:     ${MAESTRO_KAFKA_CONTAINER} -> npm run kafka"
     echo "  - WebSocket: ${MAESTRO_WEBSOCKET_CONTAINER} -> npm run websocket (port ${websocket_port})"
     echo "  - Cron:      ${MAESTRO_CRON_CONTAINER} -> npm run cron"
+    echo "  - Assistant: ${MAESTRO_ASSISTANT_CONTAINER} -> npm run assistant"
+    echo "  - Telegram:  ${MAESTRO_TELEGRAM_CONTAINER} -> npm run telegram"
     echo ""
     echo -e "${BLUE}Frontend${NC}"
     echo "  - ${SINFONIA_FRONTEND_CONTAINER} (Sinfonia SPA on port 80 inside the network)"

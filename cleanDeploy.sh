@@ -39,6 +39,8 @@ CLUSTER_GENERATED_PATHS=(
     "redis/scripts"
     "clamv/docker-compose.yml"
     "clamv/scripts"
+    "ollama/docker-compose.yml"
+    "ollama/scripts"
     "nginx/docker-compose.yml"
     "nginx/README.md"
     "nginx/conf"

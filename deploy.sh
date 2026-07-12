@@ -36,6 +36,7 @@ KAFKA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/kafka"
 REDIS_CLUSTER_DIR="${SCRIPT_DIR}/clusters/redis"
 MONGO_CLUSTER_DIR="${SCRIPT_DIR}/clusters/mongo"
 CLAMAV_CLUSTER_DIR="${SCRIPT_DIR}/clusters/clamv"
+OLLAMA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/ollama"
 NGINX_CLUSTER_DIR="${SCRIPT_DIR}/clusters/nginx"
 MAESTRO_ENV_FILE="${SCRIPT_DIR}/apps/maestro/.env"
 MAESTRO_SECRETS_SRC="${SCRIPT_DIR}/apps/maestro/secrets"
@@ -52,10 +53,13 @@ MONGODB_CONTAINER="router-01"
 MONGODB_INTERNAL_PORT="27017"
 CLAMAV_CONTAINER="clamav-1"
 CLAMAV_INTERNAL_PORT="3310"
+OLLAMA_CONTAINER="ollama"
+OLLAMA_INTERNAL_PORT="11434"
 REDIS_INTERNAL_PORT="6379"
 KAFKA_ACTIVATED="false"
 REDIS_ACTIVATED="false"
 CLAMAV_ACTIVATED="false"
+AI_ASSISTANT_ACTIVATED="false"
 
 read_env_value() {
     local file="$1"
@@ -150,7 +154,7 @@ parse_nginx_external_port() {
 configure_cluster_network_env_files() {
     local cluster_dir env_file
 
-    for cluster_dir in kafka redis mongo clamv nginx prometheus; do
+    for cluster_dir in kafka redis mongo clamv ollama nginx prometheus; do
         env_file="${SCRIPT_DIR}/clusters/${cluster_dir}/.env"
         if [ -f "$env_file" ]; then
             set_env_var "$env_file" "DOCKER_INTERNAL_NETWORK" "$DOCKER_INTERNAL_NETWORK"
@@ -213,6 +217,7 @@ show_kafka_enabled_features() {
     echo "  - Distributed cron job execution via Kafka queue"
     echo "  - Property management client emails (reservations and sales)"
     echo "  - Dedicated kafkaServer process for background consumers"
+    echo "  - AI-assistant channel responder; runs only in the dedicated assistantServer process"
     echo "  - Consumer health tracking in the server health dashboard"
     echo "  - Dead-letter queue handling for failed Kafka messages"
 }
@@ -365,6 +370,7 @@ show_redis_enabled_features() {
     echo "  - Service counters, stats snapshots, and health snapshot caching"
     echo "  - WebSocket cross-instance connection coordination"
     echo "  - Telegram health snapshot persistence"
+    echo "  - Telegram getUpdates poller leadership lock (single poller across replicas)"
 }
 
 show_redis_disabled_effects() {
@@ -517,7 +523,7 @@ show_mongo_enabled_features() {
     echo "  - Mongoose models, CRUD services, indexes, and view configs"
     echo "  - GridFS media storage and audit/soft-delete plugins"
     echo "  - Database initialization and seed data (when MONGODB_INIT=true)"
-    echo "  - Required by apiServer, kafkaServer, cronServer, and webSocketServer"
+    echo "  - Required by apiServer, kafkaServer, cronServer, webSocketServer, assistantServer, and telegramServer"
     echo "  - TLS-secured connection to the MongoDB sharded cluster router"
 }
 
@@ -995,6 +1001,14 @@ print_deploy_summary() {
         echo "  - ClamAV: disabled (file scanner: ${file_scanner:-mock})"
     fi
 
+    if [ "$(read_env_value "$deploy_maestro_env" "AI_ASSISTANT_ENABLED")" = "true" ]; then
+        echo "  - AI assistant (Ollama): enabled"
+        echo "      Endpoint: $(read_env_value "$deploy_maestro_env" "AI_ASSISTANT_BASE_URL")"
+        echo "      Model:    $(read_env_value "$deploy_maestro_env" "AI_ASSISTANT_MODEL")"
+    else
+        echo "  - AI assistant (Ollama): disabled (placeholder replies)"
+    fi
+
     echo "  - MongoDB: enabled (required)"
     echo "      Router:   ${mongo_host}:${MONGODB_INTERNAL_PORT}"
     echo "      Database: ${mongo_db}"
@@ -1024,6 +1038,9 @@ print_deploy_summary() {
     fi
     if [ "$file_scanner" = "clamav" ]; then
         print_cluster_start_hint "ClamAV" "$CLAMAV_CLUSTER_DIR"
+    fi
+    if [ "$(read_env_value "$deploy_maestro_env" "AI_ASSISTANT_ENABLED")" = "true" ]; then
+        print_cluster_start_hint "Ollama" "$OLLAMA_CLUSTER_DIR"
     fi
     print_cluster_start_hint "MongoDB" "$MONGO_CLUSTER_DIR"
     print_cluster_start_hint "Nginx" "$NGINX_CLUSTER_DIR"
@@ -1097,6 +1114,115 @@ setup_clamav_cluster() {
 
     if [ ! -f "${CLAMAV_CLUSTER_DIR}/docker-compose.yml" ]; then
         print_warning "ClamAV cluster generation was not completed. Skipping ClamAV env configuration."
+        return 1
+    fi
+
+    return 0
+}
+
+show_ai_assistant_enabled_features() {
+    echo "  - Local LLM (Ollama) powering the in-app AI-assistant chat"
+    echo "  - A dedicated Ollama server container serving the model over the internal network"
+    echo "  - The AI-assistant brain (generateAssistantReply) calls the model instead of returning a placeholder"
+    echo "  - Runs entirely on your own infrastructure; no external AI API or key required"
+    echo "  - Answered by the dedicated assistantServer process (maestroAssistant container)"
+}
+
+show_ai_assistant_disabled_effects() {
+    echo "  - AI_ASSISTANT_ENABLED will be set to false in ${MAESTRO_ENV_FILE}"
+    echo "  - The AI-assistant chat channel stays available but replies with a placeholder"
+    echo "  - No Ollama container is started; no model is downloaded"
+    echo "  - The assistant can be enabled later by re-running deploy.sh and activating Ollama"
+}
+
+configure_maestro_ai_assistant_disabled() {
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_ENABLED" "false"
+    print_status "AI assistant disabled in ${MAESTRO_ENV_FILE} (placeholder replies)"
+}
+
+configure_maestro_ai_assistant_enabled() {
+    local ollama_env_file="${OLLAMA_CLUSTER_DIR}/.env"
+    local ollama_host ollama_model base_url timeout_ms temperature
+
+    if [ -f "$ollama_env_file" ]; then
+        # shellcheck disable=SC1090
+        source "$ollama_env_file"
+    fi
+
+    ollama_host="${OLLAMA_HOST:-$OLLAMA_CONTAINER}"
+    ollama_model="${OLLAMA_MODEL:-llama3.1:8b}"
+    timeout_ms="${AI_ASSISTANT_TIMEOUT_MS:-60000}"
+    temperature="${AI_ASSISTANT_TEMPERATURE:-0.7}"
+    # Maestro reaches Ollama over the internal Docker network on the internal port.
+    base_url="http://${ollama_host}:${OLLAMA_INTERNAL_PORT}"
+
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_ENABLED" "true"
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_BASE_URL" "$base_url"
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_MODEL" "$ollama_model"
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_TIMEOUT_MS" "$timeout_ms"
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_TEMPERATURE" "$temperature"
+
+    print_status "AI assistant enabled in ${MAESTRO_ENV_FILE}"
+    print_status "Ollama endpoint: ${base_url}"
+    print_status "Ollama model: ${ollama_model}"
+}
+
+prompt_ai_assistant_activation() {
+    if cluster_is_generated "$OLLAMA_CLUSTER_DIR"; then
+        print_status "Ollama cluster already generated at ${OLLAMA_CLUSTER_DIR}, activating automatically"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}================================================================${NC}"
+    echo -e "AI assistant activation (local LLM via Ollama)"
+    echo -e "${BLUE}================================================================${NC}"
+    echo ""
+    echo "Do you want to activate the AI-assistant chat brain?"
+    echo ""
+    echo "If yes, the AI-assistant features will be available:"
+    show_ai_assistant_enabled_features
+    echo ""
+    echo "If no, the following will apply:"
+    show_ai_assistant_disabled_effects
+    echo ""
+
+    while true; do
+        read -r -p "Activate the AI assistant (Ollama)? (y/N): " activate_ai_input
+        case "${activate_ai_input:-N}" in
+            [Yy]|[Yy][Ee][Ss])
+                return 0
+                ;;
+            [Nn]|[Nn][Oo]|"")
+                return 1
+                ;;
+            *)
+                print_warning "Please answer y or n."
+                ;;
+        esac
+    done
+}
+
+setup_ai_assistant_cluster() {
+    local generate_script="${OLLAMA_CLUSTER_DIR}/generate-cluster.sh"
+
+    if cluster_is_generated "$OLLAMA_CLUSTER_DIR"; then
+        print_status "Ollama cluster already generated, skipping generator"
+        return 0
+    fi
+
+    if [ ! -x "$generate_script" ]; then
+        chmod +x "$generate_script"
+    fi
+
+    print_status "Running Ollama cluster generator"
+    (
+        cd "$OLLAMA_CLUSTER_DIR"
+        ./generate-cluster.sh
+    )
+
+    if [ ! -f "${OLLAMA_CLUSTER_DIR}/docker-compose.yml" ]; then
+        print_warning "Ollama cluster generation was not completed. Skipping AI-assistant env configuration."
         return 1
     fi
 
@@ -1331,6 +1457,21 @@ if prompt_clamav_activation; then
 else
     configure_maestro_clamav_disabled
     print_status "Continuing deployment with mock file scanner"
+fi
+
+if prompt_ai_assistant_activation; then
+    if setup_ai_assistant_cluster; then
+        AI_ASSISTANT_ACTIVATED="true"
+        configure_maestro_ai_assistant_enabled
+        print_status "Ollama cluster configuration completed"
+        print_status "Start the cluster with: cd ${OLLAMA_CLUSTER_DIR} && docker-compose up -d"
+    else
+        configure_maestro_ai_assistant_disabled
+        print_warning "AI assistant activation was not completed; continuing with placeholder replies"
+    fi
+else
+    configure_maestro_ai_assistant_disabled
+    print_status "Continuing deployment without the local AI assistant"
 fi
 
 setup_mandatory_mongodb
