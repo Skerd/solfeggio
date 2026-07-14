@@ -1,6 +1,7 @@
 # Build from the deploy folder (must contain armonia/ and sinfonia/):
-#   docker build -f apps/sinfonia/Dockerfile -t arpeggio-frontend:latest deploy/
+#   docker build -f apps/sinfonia/Dockerfile --build-arg VITE_SINFONIA_APP=<appId> -t arpeggio-frontend-<appId>:latest deploy/
 #
+# <appId> is any folder under sinfonia/src/apps/ (e.g. core, public).
 # API and WebSocket routing are handled by the nginx gateway cluster.
 # This image only serves the built SPA static assets.
 
@@ -8,6 +9,9 @@ FROM node:22-alpine AS build
 
 # Large Vite/Rollup graphs (15k+ modules) exceed Node's default ~2 GiB heap during chunk rendering.
 ENV NODE_OPTIONS="--max-old-space-size=6144"
+
+ARG VITE_SINFONIA_APP=core
+ENV VITE_SINFONIA_APP=$VITE_SINFONIA_APP
 
 WORKDIR /armonia
 

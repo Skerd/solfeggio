@@ -28,7 +28,12 @@ Solfeggio does not contain application logic. It prepares a `deploy/` workspace 
 ./systemUp.sh
 ```
 
-After `systemUp.sh` completes, the public entry point is the Nginx gateway (default: `http://localhost:80`).
+After `systemUp.sh` completes, each selected Sinfonia client is exposed on its own Nginx host port (defaults: first app on `80`, additional apps from `8080`).
+
+Example after selecting `core,public`:
+
+- **core:** `http://localhost:80`
+- **public:** `http://localhost:8080`
 
 To tear down generated artifacts and start fresh:
 
@@ -45,14 +50,15 @@ Interactive wizard that:
 1. Prompts for **modules** to deploy (comma-separated, e.g. `eCommerce,propertyManagement`)
 2. Sets the shared **Docker internal network** name (default: `arpeggio_internal_network`)
 3. Clones or updates **Armonia**, **Maestro**, and **Sinfonia** core repos plus per-module repos from GitHub
-4. Generates `deploy/scripts/modules.manifest.json` and syncs Maestro build scripts
-5. Configures optional and required **infrastructure clusters**
-6. Copies and updates `apps/maestro/.env` into `deploy/maestro/.env`
+4. Prompts for **Sinfonia client apps** to deploy (comma-separated ids under `src/apps/`, e.g. `core,public`)
+5. Generates `deploy/scripts/modules.manifest.json`, `sinfonia-apps.env`, and syncs Maestro build scripts
+6. Configures optional and required **infrastructure clusters**
+7. Copies and updates `apps/maestro/.env` into `deploy/maestro/.env`
 
 **Required infrastructure** (always configured):
 
 - **MongoDB** — sharded cluster with TLS; primary application database
-- **Nginx gateway** — public entry point routing `/`, `/api/`, and `/ws/`
+- **Nginx gateway** — public entry point(s) for selected Sinfonia clients, `/api/`, and `/ws/`
 
 **Optional infrastructure** (prompted during deploy):
 
@@ -70,7 +76,7 @@ Validates the prepared `deploy/` folder, then:
 2. Builds **Maestro** and **Sinfonia** Docker images from `apps/*/Dockerfile`
 3. Generates `deploy/docker-compose.servers.yml` and `deploy/docker-compose.frontend.yml`
 4. Starts infrastructure clusters (MongoDB → Redis → Kafka → ClamAV → Prometheus)
-5. Starts Maestro services and the Sinfonia frontend
+5. Starts Maestro services and every selected Sinfonia client container
 6. Starts the Nginx gateway last
 
 **Maestro containers** (single image, different commands):
@@ -84,11 +90,13 @@ Validates the prepared `deploy/` folder, then:
 | `maestroAssistant` | `npm run assistant` | AI-channel responder |
 | `maestroTelegram` | `npm run telegram` | Telegram bot long-poll + linking |
 
-**Frontend container:**
+**Frontend containers** (one per selected Sinfonia client app):
 
 | Container | Purpose |
 |-----------|---------|
-| `frontend` | Sinfonia SPA served by Nginx on port 80 inside the network |
+| `frontend-<appId>` | Built SPA for `src/apps/<appId>` (internal port 80) |
+
+Example: selecting `core,public` yields `frontend-core` and `frontend-public`.
 
 ### 3. `./cleanDeploy.sh` — reset
 
@@ -107,7 +115,9 @@ solfeggio/
 │   │   ├── .env           # Maestro env template (gitignored; edited by deploy.sh)
 │   │   └── scripts/       # Build helpers synced to deploy/scripts/
 │   └── sinfonia/
-│       └── Dockerfile     # Multi-stage Sinfonia build → Nginx static serve
+│       └── Dockerfile     # Multi-stage Sinfonia build → Nginx static serve (`VITE_SINFONIA_APP`)
+├── lib/
+│   └── sinfonia-client-apps.sh  # Shared client-app selection/parsing helpers
 ├── clusters/
 │   ├── kafka/             # KRaft Kafka cluster (SASL_SSL)
 │   ├── redis/             # Redis with Sentinel
@@ -126,15 +136,17 @@ solfeggio/
 
 ## Nginx gateway routes
 
-The generated gateway proxies public traffic to application containers on the shared Docker network:
+The gateway exposes **one host port per selected Sinfonia client**. Ports are assigned during `./deploy.sh` (first client default `80`, additional clients from `8080`).
 
 | Path | Upstream | Purpose |
 |------|----------|---------|
-| `/` | `frontend` | Sinfonia SPA |
-| `/assets/` | `frontend` | Static assets |
+| `/` (per client port) | `frontend-<appId>` | That Sinfonia client SPA |
+| `/assets/` (per client port) | `frontend-<appId>` | That SPA's static assets |
 | `/api/` | `maestroApi` | Maestro REST API |
 | `/api/auxiliary/media/` | `maestroApi` | Media uploads/downloads |
 | `/ws/` | `maestroWebsocket` | WebSocket server |
+
+Client selection is stored in `deploy/scripts/sinfonia-apps.env` (and mirrored into `clusters/nginx/.env` as `SINFONIA_CLIENT_APPS`).
 
 See [clusters/nginx/README.md](clusters/nginx/README.md) for details after running `./deploy.sh`.
 
@@ -204,14 +216,15 @@ Dockerfiles under `apps/` expect the **`deploy/` folder** as build context (not 
 # Maestro
 docker build -f apps/maestro/Dockerfile -t arpeggio-maestro:latest deploy/
 
-# Sinfonia
-docker build -f apps/sinfonia/Dockerfile -t arpeggio-frontend:latest deploy/
+# Any Sinfonia client under src/apps/<appId>/
+docker build -f apps/sinfonia/Dockerfile --build-arg VITE_SINFONIA_APP=core -t arpeggio-frontend-core:latest deploy/
+docker build -f apps/sinfonia/Dockerfile --build-arg VITE_SINFONIA_APP=public -t arpeggio-frontend-public:latest deploy/
 ```
 
-`systemUp.sh` handles this automatically. Override image names with environment variables:
+`systemUp.sh` builds whichever clients were selected in `./deploy.sh`. Override naming with:
 
 - `ARPEGGIO_MAESTRO_IMAGE` (default: `arpeggio-maestro:latest`)
-- `ARPEGGIO_FRONTEND_IMAGE` (default: `arpeggio-frontend:latest`)
+- `ARPEGGIO_FRONTEND_IMAGE_PREFIX` (default: `arpeggio-frontend` → images `arpeggio-frontend-<appId>:latest`)
 
 ## Module repositories
 

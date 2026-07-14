@@ -21,14 +21,16 @@ print_error() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/sinfonia-client-apps.sh
+source "${SCRIPT_DIR}/lib/sinfonia-client-apps.sh"
 DEPLOY_DIR="${SCRIPT_DIR}/deploy"
 ARMONIA_DIR="${DEPLOY_DIR}/armonia"
 MAESTRO_DIR="${DEPLOY_DIR}/maestro"
 SINFONIA_DIR="${DEPLOY_DIR}/sinfonia"
+SINFONIA_APPS_ENV_FILE="${DEPLOY_DIR}/scripts/sinfonia-apps.env"
 MAESTRO_DOCKERFILE="${SCRIPT_DIR}/apps/maestro/Dockerfile"
 SINFONIA_DOCKERFILE="${SCRIPT_DIR}/apps/sinfonia/Dockerfile"
 MAESTRO_IMAGE="${ARPEGGIO_MAESTRO_IMAGE:-arpeggio-maestro:latest}"
-FRONTEND_IMAGE="${ARPEGGIO_FRONTEND_IMAGE:-arpeggio-frontend:latest}"
 SERVERS_COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.servers.yml"
 FRONTEND_COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.frontend.yml"
 SERVERS_COMPOSE_PROJECT="servers"
@@ -57,7 +59,6 @@ MAESTRO_WEBSOCKET_CONTAINER="maestroWebsocket"
 MAESTRO_CRON_CONTAINER="maestroCron"
 MAESTRO_ASSISTANT_CONTAINER="maestroAssistant"
 MAESTRO_TELEGRAM_CONTAINER="maestroTelegram"
-SINFONIA_FRONTEND_CONTAINER="frontend"
 
 STARTED_CLUSTERS=()
 DOCKER_BUILD_NO_CACHE=false
@@ -69,7 +70,7 @@ for arg in "$@"; do
             ;;
         -h|--help)
             echo "Usage: $0 [--no-cache]"
-            echo "  --no-cache  Build Maestro and Sinfonia images without Docker layer cache"
+            echo "  --no-cache  Build Maestro and selected Sinfonia client images without Docker layer cache"
             exit 0
             ;;
         *)
@@ -100,6 +101,7 @@ docker_compose() {
 
 validate_deploy_sources() {
     local missing=0
+    local i app_html
 
     echo ""
     echo -e "${BLUE}================================================================${NC}"
@@ -144,6 +146,26 @@ validate_deploy_sources() {
     if [ ! -f "$SINFONIA_DOCKERFILE" ]; then
         print_error "Missing Sinfonia Dockerfile: ${SINFONIA_DOCKERFILE}"
         missing=1
+    fi
+
+    if [ ! -f "$SINFONIA_APPS_ENV_FILE" ]; then
+        print_error "Missing Sinfonia apps manifest: ${SINFONIA_APPS_ENV_FILE}"
+        print_error "Run ./deploy.sh and choose which client apps to deploy."
+        missing=1
+    elif ! load_sinfonia_apps_manifest "$SINFONIA_APPS_ENV_FILE"; then
+        print_error "Invalid Sinfonia apps manifest: ${SINFONIA_APPS_ENV_FILE}"
+        missing=1
+    else
+        print_status "Sinfonia clients to deploy: $(build_sinfonia_client_apps_spec)"
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            app_html="${SINFONIA_DIR}/src/apps/${SINFONIA_APP_IDS[$i]}/index.html"
+            if [ ! -f "$app_html" ]; then
+                print_error "Selected client \"${SINFONIA_APP_IDS[$i]}\" is missing ${app_html}"
+                missing=1
+            else
+                print_status "Found client ${SINFONIA_APP_IDS[$i]} -> ${SINFONIA_APP_IMAGES[$i]}"
+            fi
+        done
     fi
 
     if [ "$missing" -ne 0 ]; then
@@ -266,18 +288,19 @@ build_maestro_image() {
     print_status "Maestro image built successfully"
 }
 
-build_sinfonia_image() {
-    echo ""
-    echo -e "${BLUE}================================================================${NC}"
-    echo -e "${BLUE}                 Building Sinfonia image${NC}"
-    echo -e "${BLUE}================================================================${NC}"
-    echo ""
+build_sinfonia_app_image() {
+    local app_id="$1"
+    local image_tag="$2"
 
-    print_status "Image: ${FRONTEND_IMAGE}"
+    print_status "Building Sinfonia app=${app_id} -> ${image_tag}"
     print_status "Dockerfile: ${SINFONIA_DOCKERFILE}"
     print_status "Context: ${DEPLOY_DIR}"
 
-    local build_args=(-f "$SINFONIA_DOCKERFILE" -t "$FRONTEND_IMAGE")
+    local build_args=(
+        -f "$SINFONIA_DOCKERFILE"
+        -t "$image_tag"
+        --build-arg "VITE_SINFONIA_APP=${app_id}"
+    )
     if [ "$DOCKER_BUILD_NO_CACHE" = "true" ]; then
         build_args+=(--no-cache)
         print_status "Building without cache (--no-cache)"
@@ -285,7 +308,21 @@ build_sinfonia_image() {
 
     docker build "${build_args[@]}" "$DEPLOY_DIR"
 
-    print_status "Sinfonia image built successfully"
+    print_status "Sinfonia ${app_id} image built successfully"
+}
+
+build_sinfonia_image() {
+    local i
+
+    echo ""
+    echo -e "${BLUE}================================================================${NC}"
+    echo -e "${BLUE}         Building Sinfonia client images (${#SINFONIA_APP_IDS[@]})${NC}"
+    echo -e "${BLUE}================================================================${NC}"
+    echo ""
+
+    for i in "${!SINFONIA_APP_IDS[@]}"; do
+        build_sinfonia_app_image "${SINFONIA_APP_IDS[$i]}" "${SINFONIA_APP_IMAGES[$i]}"
+    done
 }
 
 validate_cluster_bind_mounts() {
@@ -479,25 +516,35 @@ EOF
 }
 
 generate_frontend_compose() {
+    local i
+
     print_status "Generating frontend compose file: ${FRONTEND_COMPOSE_FILE}"
 
-    cat > "$FRONTEND_COMPOSE_FILE" <<EOF
+    {
+        cat <<EOF
 version: '3.8'
 
 services:
-  ${SINFONIA_FRONTEND_CONTAINER}:
-    image: ${FRONTEND_IMAGE}
-    container_name: ${SINFONIA_FRONTEND_CONTAINER}
-    hostname: ${SINFONIA_FRONTEND_CONTAINER}
+EOF
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            cat <<EOF
+  ${SINFONIA_APP_CONTAINERS[$i]}:
+    image: ${SINFONIA_APP_IMAGES[$i]}
+    container_name: ${SINFONIA_APP_CONTAINERS[$i]}
+    hostname: ${SINFONIA_APP_CONTAINERS[$i]}
     networks:
       - ${COMPOSE_NETWORK_KEY}
     restart: unless-stopped
 
+EOF
+        done
+        cat <<EOF
 networks:
   ${COMPOSE_NETWORK_KEY}:
     external: true
     name: ${DOCKER_INTERNAL_NETWORK}
 EOF
+    } > "$FRONTEND_COMPOSE_FILE"
 }
 
 generate_application_compose_files() {
@@ -522,14 +569,12 @@ start_application_stack() {
 }
 
 print_system_up_summary() {
-    local api_port websocket_port nginx_port cluster
+    local api_port websocket_port cluster i
 
     api_port="$(read_env_value "${MAESTRO_DIR}/.env" "SERVER_PORT")"
     websocket_port="$(read_env_value "${MAESTRO_DIR}/.env" "WEBSOCKET_PORT")"
     api_port="${api_port:-81}"
     websocket_port="${websocket_port:-82}"
-    nginx_port="$(read_env_value "${NGINX_CLUSTER_DIR}/.env" "NGINX_LISTEN_PORT")"
-    nginx_port="${nginx_port:-80}"
 
     echo ""
     echo -e "${GREEN}================================================================${NC}"
@@ -537,8 +582,10 @@ print_system_up_summary() {
     echo -e "${GREEN}================================================================${NC}"
     echo ""
     echo -e "${BLUE}Images${NC}"
-    echo "  - Maestro:  ${MAESTRO_IMAGE}"
-    echo "  - Frontend: ${FRONTEND_IMAGE}"
+    echo "  - Maestro: ${MAESTRO_IMAGE}"
+    for i in "${!SINFONIA_APP_IDS[@]}"; do
+        echo "  - Sinfonia ${SINFONIA_APP_IDS[$i]}: ${SINFONIA_APP_IMAGES[$i]}"
+    done
     echo ""
     if [ "${#STARTED_CLUSTERS[@]}" -gt 0 ]; then
         echo -e "${BLUE}Infrastructure clusters started${NC}"
@@ -556,14 +603,18 @@ print_system_up_summary() {
     echo "  - Telegram:  ${MAESTRO_TELEGRAM_CONTAINER} -> npm run telegram"
     echo ""
     echo -e "${BLUE}Frontend${NC}"
-    echo "  - ${SINFONIA_FRONTEND_CONTAINER} (Sinfonia SPA on port 80 inside the network)"
+    for i in "${!SINFONIA_APP_IDS[@]}"; do
+        echo "  - ${SINFONIA_APP_CONTAINERS[$i]} (${SINFONIA_APP_IDS[$i]} SPA on port 80 inside the network)"
+    done
     echo ""
     echo -e "${BLUE}Network${NC}"
     echo "  - ${DOCKER_INTERNAL_NETWORK}"
     echo ""
     if [ -f "${NGINX_CLUSTER_DIR}/docker-compose.yml" ]; then
-        echo -e "${BLUE}Public entry point${NC}"
-        echo "  - Nginx gateway: http://localhost:${nginx_port}"
+        echo -e "${BLUE}Public entry points (Nginx gateway)${NC}"
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            echo "  - ${SINFONIA_APP_IDS[$i]}: http://localhost:${SINFONIA_APP_EXTERNAL_PORTS[$i]}"
+        done
         echo ""
     fi
     echo -e "${BLUE}Manage Maestro servers${NC}"
