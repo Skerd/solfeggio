@@ -144,9 +144,16 @@ cluster_is_generated() {
 parse_nginx_external_port() {
     local compose_file="${NGINX_CLUSTER_DIR}/docker-compose.yml"
     local port
+    local env_port
 
-    if [ -n "${SINFONIA_APP_EXTERNAL_PORTS[0]:-}" ]; then
-        echo "${SINFONIA_APP_EXTERNAL_PORTS[0]}"
+    env_port="$(read_env_value "${NGINX_CLUSTER_DIR}/.env" "NGINX_EXTERNAL_PORT")"
+    if [ -n "$env_port" ]; then
+        echo "$env_port"
+        return 0
+    fi
+
+    if [ -n "${NGINX_EXTERNAL_PORT:-}" ]; then
+        echo "$NGINX_EXTERNAL_PORT"
         return 0
     fi
 
@@ -155,7 +162,6 @@ parse_nginx_external_port() {
         return 0
     fi
 
-    # First published port is the first Sinfonia client entry point.
     port="$(grep -m1 -E '^\s+-\s+"[0-9]+:[0-9]+"' "$compose_file" | sed -E 's/.*"([0-9]+):[0-9]+".*/\1/')"
     echo "${port:-80}"
 }
@@ -669,14 +675,15 @@ configure_maestro_clamav_enabled() {
 }
 
 prompt_sinfonia_client_apps() {
-    local available default_ids_csv app_input first_port_input extra_port_input
+    local available default_ids_csv app_input gateway_port_input
     local -a selected_ids=()
-    local raw_ids id first=true
+    local raw_ids id
 
     available="$(discover_sinfonia_app_ids "$SINFONIA_APPS_DIR")"
     default_ids_csv="core"
     if load_sinfonia_apps_manifest "$SINFONIA_APPS_ENV_FILE" 2>/dev/null; then
         default_ids_csv="$(IFS=,; echo "${SINFONIA_APP_IDS[*]}")"
+        NGINX_EXTERNAL_PORT="${NGINX_EXTERNAL_PORT:-80}"
     fi
 
     echo ""
@@ -685,7 +692,8 @@ prompt_sinfonia_client_apps() {
     echo -e "${BLUE}================================================================${NC}"
     echo ""
     echo "Choose which Sinfonia clients under src/apps/ to build and publish."
-    echo "Each selected app gets its own container, image, and Nginx entry-point port."
+    echo "All clients share one Nginx host port. The first app is served at / ;"
+    echo "each additional app is served at /<appId>App/ (e.g. core,public -> / and /publicApp/)."
     if [ -n "$available" ]; then
         echo "Available apps in cloned Sinfonia: ${available}"
     else
@@ -694,7 +702,7 @@ prompt_sinfonia_client_apps() {
     echo ""
 
     while true; do
-        read -r -p "Sinfonia client apps to deploy (comma-separated) [default: ${default_ids_csv}]: " app_input
+        read -r -p "Sinfonia client apps to deploy (comma-separated; first is /) [default: ${default_ids_csv}]: " app_input
         app_input="$(echo "${app_input:-$default_ids_csv}" | tr -d '[:space:]')"
         if [ -z "$app_input" ]; then
             print_error "At least one client app is required"
@@ -703,7 +711,6 @@ prompt_sinfonia_client_apps() {
 
         selected_ids=()
         IFS=',' read -r -a raw_ids <<< "$app_input"
-        first=true
         for id in "${raw_ids[@]}"; do
             [ -n "$id" ] || continue
             if [[ ! "$id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -725,56 +732,40 @@ prompt_sinfonia_client_apps() {
     done
 
     while true; do
-        read -r -p "External base port for the first client app (0-65535) [default: 80]: " first_port_input
-        SINFONIA_FIRST_EXTERNAL_PORT="${first_port_input:-80}"
-        if validate_deploy_number "$SINFONIA_FIRST_EXTERNAL_PORT" 0 65535 "First client external port"; then
+        read -r -p "Nginx gateway external port (0-65535) [default: ${NGINX_EXTERNAL_PORT:-80}]: " gateway_port_input
+        NGINX_EXTERNAL_PORT="${gateway_port_input:-${NGINX_EXTERNAL_PORT:-80}}"
+        if validate_deploy_number "$NGINX_EXTERNAL_PORT" 0 65535 "Nginx gateway external port"; then
             break
         fi
     done
 
-    SINFONIA_EXTRA_EXTERNAL_BASE=8080
-    if [ "${#selected_ids[@]}" -gt 1 ]; then
-        while true; do
-            read -r -p "External base port for additional client apps (0-65535) [default: 8080]: " extra_port_input
-            SINFONIA_EXTRA_EXTERNAL_BASE="${extra_port_input:-8080}"
-            if validate_deploy_number "$SINFONIA_EXTRA_EXTERNAL_BASE" 0 65535 "Additional clients external base port"; then
-                if [ "$SINFONIA_EXTRA_EXTERNAL_BASE" = "$SINFONIA_FIRST_EXTERNAL_PORT" ]; then
-                    print_error "Additional base port must differ from the first client port (${SINFONIA_FIRST_EXTERNAL_PORT})"
-                    continue
-                fi
-                break
-            fi
-        done
-    fi
-
     local selected_csv
     selected_csv="$(IFS=,; echo "${selected_ids[*]}")"
-    SINFONIA_CLIENT_APPS="$(build_sinfonia_client_apps_spec_from_ids "$selected_csv" "$SINFONIA_FIRST_EXTERNAL_PORT" "$SINFONIA_EXTRA_EXTERNAL_BASE")"
+    SINFONIA_CLIENT_APPS="$(build_sinfonia_client_apps_spec_from_ids "$selected_csv")"
     if ! parse_sinfonia_client_apps "$SINFONIA_CLIENT_APPS"; then
-        print_error "Failed to assign Sinfonia client ports"
+        print_error "Failed to assign Sinfonia client URL paths"
         exit 1
     fi
 
-    NGINX_EXTERNAL_PORT="${SINFONIA_APP_EXTERNAL_PORTS[0]}"
-    write_sinfonia_apps_manifest "${DEPLOY_DIR}/scripts" "${SINFONIA_FRONTEND_REPLICAS:-1}" >/dev/null
+    write_sinfonia_apps_manifest "${DEPLOY_DIR}/scripts" "${SINFONIA_FRONTEND_REPLICAS:-1}" "$NGINX_EXTERNAL_PORT" >/dev/null
 
     echo ""
-    print_status "Sinfonia clients selected:"
+    print_status "Sinfonia clients selected (gateway port ${NGINX_EXTERNAL_PORT}):"
     local i
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        print_status "- ${SINFONIA_APP_IDS[$i]} -> container ${SINFONIA_APP_CONTAINERS[$i]}, host port ${SINFONIA_APP_EXTERNAL_PORTS[$i]}, image ${SINFONIA_APP_IMAGES[$i]}"
+        print_status "- ${SINFONIA_APP_IDS[$i]} -> ${SINFONIA_APP_PATHS[$i]} (container ${SINFONIA_APP_CONTAINERS[$i]}, base ${SINFONIA_APP_BASE_PATHS[$i]})"
     done
     echo ""
 }
 
 show_nginx_gateway_features() {
     local i
-    echo "  - Public entry point for selected Sinfonia clients, Maestro API, and WebSocket traffic"
+    echo "  - Single public port for all selected Sinfonia clients, Maestro API, and WebSocket traffic"
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        echo "  - Port ${SINFONIA_APP_EXTERNAL_PORTS[$i]}: / and /assets/ -> ${SINFONIA_APP_CONTAINERS[$i]} (${SINFONIA_APP_IDS[$i]})"
+        echo "  - ${SINFONIA_APP_PATHS[$i]} -> ${SINFONIA_APP_CONTAINERS[$i]} (${SINFONIA_APP_IDS[$i]})"
     done
-    echo "  - All client ports: /api/ and /api/auxiliary/media/ -> ${MAESTRO_API_CONTAINER}"
-    echo "  - All client ports: /ws/ -> ${MAESTRO_WEBSOCKET_CONTAINER}"
+    echo "  - /api/ and /api/auxiliary/media/ -> ${MAESTRO_API_CONTAINER}"
+    echo "  - /ws/ -> ${MAESTRO_WEBSOCKET_CONTAINER}"
     echo "  - Uses shared Docker network: ${DOCKER_INTERNAL_NETWORK}"
 }
 
@@ -786,9 +777,9 @@ print_deploy_context_for_nginx() {
     for module in "${CLEANED_MODULES[@]}"; do
         echo "      - ${module}"
     done
-    echo "  - Sinfonia clients (${#SINFONIA_APP_IDS[@]}):"
+    echo "  - Sinfonia clients (${#SINFONIA_APP_IDS[@]}), gateway port ${NGINX_EXTERNAL_PORT:-80}:"
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        echo "      - ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_EXTERNAL_PORTS[$i]} (${SINFONIA_APP_CONTAINERS[$i]})"
+        echo "      - ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_PATHS[$i]} (${SINFONIA_APP_CONTAINERS[$i]})"
     done
     echo "  - Docker internal network: ${DOCKER_INTERNAL_NETWORK}"
     echo "  - Kafka cluster: $([ "$KAFKA_ACTIVATED" = "true" ] && echo "enabled" || echo "disabled")"
@@ -852,14 +843,15 @@ prompt_nginx_gateway_settings() {
         fi
     done
 
-    write_sinfonia_apps_manifest "${DEPLOY_DIR}/scripts" "$SINFONIA_FRONTEND_REPLICAS" >/dev/null
+    write_sinfonia_apps_manifest "${DEPLOY_DIR}/scripts" "$SINFONIA_FRONTEND_REPLICAS" "${NGINX_EXTERNAL_PORT:-80}" >/dev/null
 
     echo ""
     print_status "Nginx gateway summary:"
     print_status "- Gateway nodes: ${NGINX_NUM_NODES}"
+    print_status "- Gateway external port: ${NGINX_EXTERNAL_PORT:-80}"
     local i
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        print_status "- Client ${SINFONIA_APP_IDS[$i]}: host port ${SINFONIA_APP_EXTERNAL_PORTS[$i]} -> ${SINFONIA_APP_CONTAINERS[$i]}:80"
+        print_status "- Client ${SINFONIA_APP_IDS[$i]}: ${SINFONIA_APP_PATHS[$i]} -> ${SINFONIA_APP_CONTAINERS[$i]}:80"
     done
     print_status "- Frontend replicas per client: ${NGINX_NUM_FRONTEND_BACKENDS}"
     print_status "- API upstream servers: ${NGINX_NUM_API_BACKENDS} (${MAESTRO_API_CONTAINER}:${api_port})"
@@ -883,7 +875,7 @@ configure_nginx_cluster_env() {
     fi
 
     SINFONIA_CLIENT_APPS="$(build_sinfonia_client_apps_spec)"
-    NGINX_EXTERNAL_PORT="${SINFONIA_APP_EXTERNAL_PORTS[0]}"
+    NGINX_EXTERNAL_PORT="${NGINX_EXTERNAL_PORT:-80}"
 
     set_env_var "$nginx_env_file" "DOCKER_INTERNAL_NETWORK" "$DOCKER_INTERNAL_NETWORK"
     set_env_var "$nginx_env_file" "API_UPSTREAM_HOST" "$MAESTRO_API_CONTAINER"
@@ -893,6 +885,7 @@ configure_nginx_cluster_env() {
     set_env_var "$nginx_env_file" "SINFONIA_CLIENT_APPS" "$SINFONIA_CLIENT_APPS"
     set_env_var "$nginx_env_file" "SINFONIA_FRONTEND_REPLICAS" "${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
     set_env_var "$nginx_env_file" "NGINX_EXTERNAL_PORT" "$NGINX_EXTERNAL_PORT"
+    set_env_var "$nginx_env_file" "NGINX_LISTEN_PORT" "80"
     set_env_var "$nginx_env_file" "FRONTEND_UPSTREAM_PORT" "80"
 
     print_status "Nginx cluster .env synchronized with deployment settings"
@@ -932,10 +925,9 @@ setup_nginx_gateway() {
 
 configure_maestro_nginx_gateway() {
     local gateway_host="nginx-gateway-1"
-    local first_port="${SINFONIA_APP_EXTERNAL_PORTS[0]:-80}"
-    local gateway_url="http://${gateway_host}:${first_port}"
+    local gateway_port="${NGINX_EXTERNAL_PORT:-80}"
+    local gateway_url="http://${gateway_host}:${gateway_port}"
 
-    NGINX_EXTERNAL_PORT="$first_port"
     set_env_var "$MAESTRO_ENV_FILE" "CLIENT_HOST" "$gateway_url"
     print_status "Maestro CLIENT_HOST set to ${gateway_url}"
 }
@@ -950,6 +942,7 @@ setup_mandatory_nginx_gateway() {
 
     if cluster_is_generated "$NGINX_CLUSTER_DIR"; then
         print_status "Regenerating Nginx gateway for selected Sinfonia clients"
+        NGINX_EXTERNAL_PORT="${NGINX_EXTERNAL_PORT:-$(parse_nginx_external_port)}"
         NGINX_NUM_NODES="${NGINX_NUM_NODES:-1}"
         NGINX_NUM_FRONTEND_BACKENDS="${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
         SINFONIA_FRONTEND_REPLICAS="$NGINX_NUM_FRONTEND_BACKENDS"
@@ -966,7 +959,7 @@ setup_mandatory_nginx_gateway() {
     print_status "Nginx gateway configuration completed"
     local i
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        print_status "Sinfonia ${SINFONIA_APP_IDS[$i]}: http://localhost:${SINFONIA_APP_EXTERNAL_PORTS[$i]}"
+        print_status "Sinfonia ${SINFONIA_APP_IDS[$i]}: $(sinfonia_app_public_url "${NGINX_EXTERNAL_PORT:-80}" "${SINFONIA_APP_PATHS[$i]}")"
     done
     print_status "Start the gateway with: cd ${NGINX_CLUSTER_DIR} && docker-compose up -d"
 }
@@ -1146,10 +1139,11 @@ print_deploy_summary() {
 
     echo "  - Nginx gateway: enabled (required)"
     echo "      Nodes:               ${NGINX_NUM_NODES:-1}"
+    echo "      External port:       ${NGINX_EXTERNAL_PORT:-80}"
     echo "      Frontend replicas:   ${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
     local _i
     for _i in "${!SINFONIA_APP_IDS[@]}"; do
-        echo "      Client ${SINFONIA_APP_IDS[$_i]}:   http://localhost:${SINFONIA_APP_EXTERNAL_PORTS[$_i]} -> ${SINFONIA_APP_CONTAINERS[$_i]}"
+        echo "      Client ${SINFONIA_APP_IDS[$_i]}:   $(sinfonia_app_public_url "${NGINX_EXTERNAL_PORT:-80}" "${SINFONIA_APP_PATHS[$_i]}") -> ${SINFONIA_APP_CONTAINERS[$_i]}"
     done
     echo "      API upstreams:       ${NGINX_NUM_API_BACKENDS:-1} (${MAESTRO_API_CONTAINER}:${api_port:-81})"
     echo "      WebSocket upstreams: ${NGINX_NUM_WEBSOCKET_BACKENDS:-1} (${MAESTRO_WEBSOCKET_CONTAINER}:${websocket_port:-82})"

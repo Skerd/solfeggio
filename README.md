@@ -28,12 +28,15 @@ Solfeggio does not contain application logic. It prepares a `deploy/` workspace 
 ./systemUp.sh
 ```
 
-After `systemUp.sh` completes, each selected Sinfonia client is exposed on its own Nginx host port (defaults: first app on `80`, additional apps from `8080`).
+After `systemUp.sh` completes, all selected Sinfonia clients share the Nginx gateway port (default `80`):
+
+- **First selected app** (usually `core`): `http://localhost:80/`
+- **Additional apps**: `http://localhost:80/<appId>App/` (e.g. `http://localhost:80/publicApp/`)
 
 Example after selecting `core,public`:
 
-- **core:** `http://localhost:80`
-- **public:** `http://localhost:8080`
+- **core:** `http://localhost/`
+- **public:** `http://localhost/publicApp/`
 
 To tear down generated artifacts and start fresh:
 
@@ -136,17 +139,18 @@ solfeggio/
 
 ## Nginx gateway routes
 
-The gateway exposes **one host port per selected Sinfonia client**. Ports are assigned during `./deploy.sh` (first client default `80`, additional clients from `8080`).
+The gateway exposes **one host port** (default `80`). The first selected Sinfonia client is at `/`; every additional client is at `/<appId>App/` and is built with matching Vite `base`.
 
 | Path | Upstream | Purpose |
 |------|----------|---------|
-| `/` (per client port) | `frontend-<appId>` | That Sinfonia client SPA |
-| `/assets/` (per client port) | `frontend-<appId>` | That SPA's static assets |
+| `/` | `frontend-<rootApp>` | Default/root Sinfonia client (usually `core`) |
+| `/<appId>App/` | `frontend-<appId>` | Additional Sinfonia clients (e.g. `public` → `/publicApp/`) |
+| `/assets/` | root client | Root SPA static assets |
 | `/api/` | `maestroApi` | Maestro REST API |
 | `/api/auxiliary/media/` | `maestroApi` | Media uploads/downloads |
 | `/ws/` | `maestroWebsocket` | WebSocket server |
 
-Client selection is stored in `deploy/scripts/sinfonia-apps.env` (and mirrored into `clusters/nginx/.env` as `SINFONIA_CLIENT_APPS`).
+Client selection is stored in `deploy/scripts/sinfonia-apps.env` (and mirrored into `clusters/nginx/.env` as `SINFONIA_CLIENT_APPS`, e.g. `core@/,public@/publicApp/`).
 
 See [clusters/nginx/README.md](clusters/nginx/README.md) for details after running `./deploy.sh`.
 
@@ -216,9 +220,17 @@ Dockerfiles under `apps/` expect the **`deploy/` folder** as build context (not 
 # Maestro
 docker build -f apps/maestro/Dockerfile -t arpeggio-maestro:latest deploy/
 
-# Any Sinfonia client under src/apps/<appId>/
-docker build -f apps/sinfonia/Dockerfile --build-arg VITE_SINFONIA_APP=core -t arpeggio-frontend-core:latest deploy/
-docker build -f apps/sinfonia/Dockerfile --build-arg VITE_SINFONIA_APP=public -t arpeggio-frontend-public:latest deploy/
+# Root client (path /)
+docker build -f apps/sinfonia/Dockerfile \
+  --build-arg VITE_SINFONIA_APP=core \
+  --build-arg VITE_BASE_PATH=/ \
+  -t arpeggio-frontend-core:latest deploy/
+
+# Path-mounted client (path /publicApp/)
+docker build -f apps/sinfonia/Dockerfile \
+  --build-arg VITE_SINFONIA_APP=public \
+  --build-arg VITE_BASE_PATH=/publicApp/ \
+  -t arpeggio-frontend-public:latest deploy/
 ```
 
 `systemUp.sh` builds whichever clients were selected in `./deploy.sh`. Override naming with:

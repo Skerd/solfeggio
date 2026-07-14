@@ -163,7 +163,7 @@ validate_deploy_sources() {
                 print_error "Selected client \"${SINFONIA_APP_IDS[$i]}\" is missing ${app_html}"
                 missing=1
             else
-                print_status "Found client ${SINFONIA_APP_IDS[$i]} -> ${SINFONIA_APP_IMAGES[$i]}"
+                print_status "Found client ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_PATHS[$i]} -> ${SINFONIA_APP_IMAGES[$i]}"
             fi
         done
     fi
@@ -291,8 +291,9 @@ build_maestro_image() {
 build_sinfonia_app_image() {
     local app_id="$1"
     local image_tag="$2"
+    local base_path="$3"
 
-    print_status "Building Sinfonia app=${app_id} -> ${image_tag}"
+    print_status "Building Sinfonia app=${app_id} base=${base_path} -> ${image_tag}"
     print_status "Dockerfile: ${SINFONIA_DOCKERFILE}"
     print_status "Context: ${DEPLOY_DIR}"
 
@@ -300,6 +301,7 @@ build_sinfonia_app_image() {
         -f "$SINFONIA_DOCKERFILE"
         -t "$image_tag"
         --build-arg "VITE_SINFONIA_APP=${app_id}"
+        --build-arg "VITE_BASE_PATH=${base_path}"
     )
     if [ "$DOCKER_BUILD_NO_CACHE" = "true" ]; then
         build_args+=(--no-cache)
@@ -321,7 +323,7 @@ build_sinfonia_image() {
     echo ""
 
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        build_sinfonia_app_image "${SINFONIA_APP_IDS[$i]}" "${SINFONIA_APP_IMAGES[$i]}"
+        build_sinfonia_app_image "${SINFONIA_APP_IDS[$i]}" "${SINFONIA_APP_IMAGES[$i]}" "${SINFONIA_APP_BASE_PATHS[$i]}"
     done
 }
 
@@ -611,9 +613,9 @@ print_system_up_summary() {
     echo "  - ${DOCKER_INTERNAL_NETWORK}"
     echo ""
     if [ -f "${NGINX_CLUSTER_DIR}/docker-compose.yml" ]; then
-        echo -e "${BLUE}Public entry points (Nginx gateway)${NC}"
+        echo -e "${BLUE}Public entry points (Nginx gateway port ${NGINX_EXTERNAL_PORT:-80})${NC}"
         for i in "${!SINFONIA_APP_IDS[@]}"; do
-            echo "  - ${SINFONIA_APP_IDS[$i]}: http://localhost:${SINFONIA_APP_EXTERNAL_PORTS[$i]}"
+            echo "  - ${SINFONIA_APP_IDS[$i]}: $(sinfonia_app_public_url "${NGINX_EXTERNAL_PORT:-80}" "${SINFONIA_APP_PATHS[$i]}")"
         done
         echo ""
     fi

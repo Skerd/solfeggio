@@ -1,9 +1,10 @@
 # Build from the deploy folder (must contain armonia/ and sinfonia/):
-#   docker build -f apps/sinfonia/Dockerfile --build-arg VITE_SINFONIA_APP=<appId> -t arpeggio-frontend-<appId>:latest deploy/
+#   docker build -f apps/sinfonia/Dockerfile \
+#     --build-arg VITE_SINFONIA_APP=<appId> \
+#     --build-arg VITE_BASE_PATH=/   # or /<appId>App/ for path-mounted clients
+#     -t arpeggio-frontend-<appId>:latest deploy/
 #
-# <appId> is any folder under sinfonia/src/apps/ (e.g. core, public).
-# API and WebSocket routing are handled by the nginx gateway cluster.
-# This image only serves the built SPA static assets.
+# Gateway strips non-root URL prefixes, so the container always serves at `/`.
 
 FROM node:22-alpine AS build
 
@@ -12,6 +13,10 @@ ENV NODE_OPTIONS="--max-old-space-size=6144"
 
 ARG VITE_SINFONIA_APP=core
 ENV VITE_SINFONIA_APP=$VITE_SINFONIA_APP
+
+# Must match the gateway URL path for this client (`/` or `/publicApp/`, etc.).
+ARG VITE_BASE_PATH=/
+ENV VITE_BASE_PATH=$VITE_BASE_PATH
 
 WORKDIR /armonia
 
