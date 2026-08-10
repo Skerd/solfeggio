@@ -190,13 +190,20 @@ load_client_apps_or_exit() {
 
 print_configuration_summary() {
     local i
+    local mount_label
 
     echo -e ""
     print_status "Configuration Summary:"
     print_status "- Nginx gateway nodes: ${GREEN}${num_nginx_nodes}${NC}"
     print_status "- Gateway external base port: ${GREEN}${nginx_external_port}${NC}"
+    print_status "- Gateway mode: ${GREEN}${SINFONIA_GATEWAY_MODE:-path}${NC}"
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        print_status "- Client ${SINFONIA_APP_IDS[$i]}: path ${GREEN}${SINFONIA_APP_PATHS[$i]}${NC} -> ${SINFONIA_APP_CONTAINERS[$i]}:${FRONTEND_UPSTREAM_PORT}"
+        if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
+            mount_label="host ${SINFONIA_APP_HOSTS[$i]}"
+        else
+            mount_label="path ${SINFONIA_APP_PATHS[$i]}"
+        fi
+        print_status "- Client ${SINFONIA_APP_IDS[$i]}: ${mount_label} -> ${SINFONIA_APP_CONTAINERS[$i]}:${FRONTEND_UPSTREAM_PORT} (base ${SINFONIA_APP_BASE_PATHS[$i]})"
     done
     print_status "- Frontend replicas per client: ${GREEN}${num_frontend_backends}${NC}"
     print_status "- API upstream servers: ${GREEN}${num_api_backends}${NC} (${API_UPSTREAM_HOST}:${API_UPSTREAM_PORT})"
@@ -236,8 +243,9 @@ get_user_input() {
     echo -e "${BLUE}================================================================${NC}"
     echo -e "Ready to configure the Nginx gateway cluster, please provide the needed information:"
     echo -e ""
-    echo -e "All Sinfonia clients share one host port. The first app is served at ${GREEN}/${NC};"
-    echo -e "additional apps are served at ${GREEN}/<appId>App/${NC}."
+    echo -e "Path mode: ${GREEN}core,public${NC}  (first at /, others at /<appId>App/)"
+    echo -e "Host mode: ${GREEN}dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al${NC}"
+    echo -e "Aliases:   ${GREEN}public@pronix.al|www.pronix.al${NC}"
     echo -e ""
 
     while true; do
@@ -257,18 +265,17 @@ get_user_input() {
     done
 
     while true; do
-        read -p "Sinfonia client apps (comma-separated; first is /) [default: core]: " apps_input
+        read -p "Sinfonia clients [default: core]: " apps_input
         apps_input="$(echo "${apps_input:-core}" | tr -d '[:space:]')"
-        IFS=',' read -r -a selected_ids <<< "$apps_input"
-        if [ "${#selected_ids[@]}" -eq 0 ]; then
+        if [ -z "$apps_input" ]; then
             print_error "At least one client app is required"
             continue
         fi
-        break
+        SINFONIA_CLIENT_APPS="$(normalize_sinfonia_client_apps_input "$apps_input")"
+        if parse_sinfonia_client_apps "$SINFONIA_CLIENT_APPS"; then
+            break
+        fi
     done
-
-    SINFONIA_CLIENT_APPS="$(build_sinfonia_client_apps_spec_from_ids "$(IFS=,; echo "${selected_ids[*]}")")"
-    load_client_apps_or_exit
 
     while true; do
         read -p "Enter number of frontend replicas per client app (1-10) [default: 1]: " num_frontend_backends
@@ -315,72 +322,13 @@ find_root_app_index() {
     echo "0"
 }
 
-generate_gateway_conf() {
-    local frontend_method_line api_method_line websocket_method_line
-    local i root_idx root_upstream path strip_path
+# Shared Maestro + SPA locations for a single server block.
+# Args: frontend_upstream [emit_root_assets=true]
+emit_gateway_server_locations() {
+    local frontend_upstream=$1
+    local emit_root_assets="${2:-true}"
 
-    mkdir -p conf
-
-    frontend_method_line="$(normalize_load_balance_method "$FRONTEND_LOAD_BALANCE_METHOD")"
-    api_method_line="$(normalize_load_balance_method "$API_LOAD_BALANCE_METHOD")"
-    websocket_method_line="$(normalize_load_balance_method "$WEBSOCKET_LOAD_BALANCE_METHOD")"
-    root_idx="$(find_root_app_index)"
-    root_upstream="${SINFONIA_APP_UPSTREAMS[$root_idx]}"
-
-    print_status "Generating conf/gateway.conf..."
-
-    {
-        for i in "${!SINFONIA_APP_IDS[@]}"; do
-            generate_upstream_block \
-                "${SINFONIA_APP_UPSTREAMS[$i]}" \
-                "${SINFONIA_APP_CONTAINERS[$i]}" \
-                "$FRONTEND_UPSTREAM_PORT" \
-                "$num_frontend_backends" \
-                "$frontend_method_line"
-        done
-        generate_upstream_block "api" "$API_UPSTREAM_HOST" "$API_UPSTREAM_PORT" "$num_api_backends" "$api_method_line"
-        generate_upstream_block "maestroWebsocket" "$WEBSOCKET_UPSTREAM_HOST" "$WEBSOCKET_UPSTREAM_PORT" "$num_websocket_backends" "$websocket_method_line"
-
-        cat <<EOF
-server {
-    listen ${NGINX_LISTEN_PORT};
-    server_name _;
-
-    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
-
-    proxy_http_version 1.1;
-
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-
-    proxy_connect_timeout ${PROXY_CONNECT_TIMEOUT};
-    proxy_send_timeout ${PROXY_SEND_TIMEOUT};
-    proxy_read_timeout ${PROXY_READ_TIMEOUT};
-
-EOF
-
-        # Non-root client paths first (longest-prefix wins over `/`).
-        for i in "${!SINFONIA_APP_IDS[@]}"; do
-            path="${SINFONIA_APP_PATHS[$i]}"
-            [ "$path" != "/" ] || continue
-            strip_path="${path%/}"
-            cat <<EOF
-    location = ${strip_path} {
-        return 301 ${path};
-    }
-
-    location ${path} {
-        # Trailing slash on proxy_pass strips the URL prefix so the SPA
-        # container (built with matching VITE_BASE_PATH) still serves at /.
-        proxy_pass http://${SINFONIA_APP_UPSTREAMS[$i]}/;
-    }
-
-EOF
-        done
-
-        cat <<EOF
+    cat <<EOF
     location /api/ {
         proxy_pass http://api;
 
@@ -407,8 +355,12 @@ EOF
         proxy_send_timeout ${WEBSOCKET_SEND_TIMEOUT};
     }
 
+EOF
+
+    if [ "$emit_root_assets" = "true" ]; then
+        cat <<EOF
     location /assets/ {
-        proxy_pass http://${root_upstream};
+        proxy_pass http://${frontend_upstream};
 
         proxy_buffering off;
 
@@ -420,10 +372,117 @@ EOF
     }
 
     location / {
-        proxy_pass http://${root_upstream};
+        proxy_pass http://${frontend_upstream};
     }
+EOF
+    fi
+}
+
+generate_gateway_conf() {
+    local frontend_method_line api_method_line websocket_method_line
+    local i root_idx root_upstream path strip_path
+    local listen_opts server_names
+
+    mkdir -p conf
+
+    frontend_method_line="$(normalize_load_balance_method "$FRONTEND_LOAD_BALANCE_METHOD")"
+    api_method_line="$(normalize_load_balance_method "$API_LOAD_BALANCE_METHOD")"
+    websocket_method_line="$(normalize_load_balance_method "$WEBSOCKET_LOAD_BALANCE_METHOD")"
+    root_idx="$(find_root_app_index)"
+    root_upstream="${SINFONIA_APP_UPSTREAMS[$root_idx]}"
+
+    print_status "Generating conf/gateway.conf (mode=${SINFONIA_GATEWAY_MODE:-path})..."
+
+    {
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            generate_upstream_block \
+                "${SINFONIA_APP_UPSTREAMS[$i]}" \
+                "${SINFONIA_APP_CONTAINERS[$i]}" \
+                "$FRONTEND_UPSTREAM_PORT" \
+                "$num_frontend_backends" \
+                "$frontend_method_line"
+        done
+        generate_upstream_block "api" "$API_UPSTREAM_HOST" "$API_UPSTREAM_PORT" "$num_api_backends" "$api_method_line"
+        generate_upstream_block "maestroWebsocket" "$WEBSOCKET_UPSTREAM_HOST" "$WEBSOCKET_UPSTREAM_PORT" "$num_websocket_backends" "$websocket_method_line"
+
+        if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
+            for i in "${!SINFONIA_APP_IDS[@]}"; do
+                server_names="${SINFONIA_APP_HOSTS[$i]}"
+                if [ "$i" -eq 0 ]; then
+                    listen_opts="${NGINX_LISTEN_PORT} default_server"
+                else
+                    listen_opts="${NGINX_LISTEN_PORT}"
+                fi
+                cat <<EOF
+server {
+    listen ${listen_opts};
+    server_name ${server_names};
+
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+
+    proxy_http_version 1.1;
+
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+
+    proxy_connect_timeout ${PROXY_CONNECT_TIMEOUT};
+    proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    proxy_read_timeout ${PROXY_READ_TIMEOUT};
+
+EOF
+                emit_gateway_server_locations "${SINFONIA_APP_UPSTREAMS[$i]}" "true"
+                cat <<EOF
+}
+
+EOF
+            done
+        else
+            cat <<EOF
+server {
+    listen ${NGINX_LISTEN_PORT};
+    server_name _;
+
+    client_max_body_size ${CLIENT_MAX_BODY_SIZE};
+
+    proxy_http_version 1.1;
+
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+
+    proxy_connect_timeout ${PROXY_CONNECT_TIMEOUT};
+    proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+    proxy_read_timeout ${PROXY_READ_TIMEOUT};
+
+EOF
+
+            # Non-root client paths first (longest-prefix wins over `/`).
+            for i in "${!SINFONIA_APP_IDS[@]}"; do
+                path="${SINFONIA_APP_PATHS[$i]}"
+                [ "$path" != "/" ] || continue
+                strip_path="${path%/}"
+                cat <<EOF
+    location = ${strip_path} {
+        return 301 ${path};
+    }
+
+    location ${path} {
+        # Trailing slash on proxy_pass strips the URL prefix so the SPA
+        # container (built with matching VITE_BASE_PATH) still serves at /.
+        proxy_pass http://${SINFONIA_APP_UPSTREAMS[$i]}/;
+    }
+
+EOF
+            done
+
+            emit_gateway_server_locations "$root_upstream" "true"
+            cat <<EOF
 }
 EOF
+        fi
     } > conf/gateway.conf
 
     print_status "Finished generating conf/gateway.conf"
@@ -478,6 +537,8 @@ generate_setup_scripts() {
     local i
     local ids_csv=""
     local paths_csv=""
+    local hosts_csv=""
+    local mode="${SINFONIA_GATEWAY_MODE:-path}"
 
     mkdir -p scripts
 
@@ -485,9 +546,12 @@ generate_setup_scripts() {
         if [ -n "$ids_csv" ]; then
             ids_csv+=","
             paths_csv+=","
+            hosts_csv+=","
         fi
         ids_csv+="${SINFONIA_APP_IDS[$i]}"
         paths_csv+="${SINFONIA_APP_PATHS[$i]}"
+        # Use primary host only in the CSV (spaces would break shell arrays).
+        hosts_csv+="$(sinfonia_app_primary_host "$i")"
     done
 
     print_status "Generating scripts/wait-for-nginx.sh..."
@@ -554,31 +618,47 @@ EOF
 set -euo pipefail
 
 BASE_PORT=${nginx_external_port}
+GATEWAY_MODE=${mode}
 APP_IDS=(${ids_csv//,/ })
 APP_PATHS=(${paths_csv//,/ })
+APP_HOSTS=(${hosts_csv//,/ })
 
 check_route() {
     local label="\$1"
-    local path="\$2"
+    local url="\$2"
     local expected_codes="\$3"
+    local host_header="\${4:-}"
+    local curl_args=(-s -o /dev/null -w "%{http_code}")
 
-    status_code=\$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:\${BASE_PORT}\${path}")
+    if [ -n "\$host_header" ]; then
+        curl_args+=(-H "Host: \${host_header}")
+    fi
+
+    status_code=\$(curl "\${curl_args[@]}" "\$url")
     if echo "\${expected_codes}" | grep -qw "\${status_code}"; then
-        echo "[OK] \${label} -> \${path} (HTTP \${status_code})"
+        echo "[OK] \${label} -> \${url} (HTTP \${status_code})"
     else
-        echo "[WARN] \${label} -> \${path} (HTTP \${status_code}, expected one of: \${expected_codes})"
+        echo "[WARN] \${label} -> \${url} (HTTP \${status_code}, expected one of: \${expected_codes})"
     fi
 }
 
-echo "Checking gateway routes on port \${BASE_PORT}..."
+echo "Checking gateway routes on port \${BASE_PORT} (mode=\${GATEWAY_MODE})..."
 for idx in "\${!APP_IDS[@]}"; do
     app="\${APP_IDS[idx]}"
-    path="\${APP_PATHS[idx]}"
-    check_route "Client \${app}" "\$path" "200 301 302 404 502 503 504"
+    if [ "\$GATEWAY_MODE" = "host" ]; then
+        host="\${APP_HOSTS[idx]}"
+        check_route "Client \${app}" "http://localhost:\${BASE_PORT}/" "200 301 302 404 502 503 504" "\$host"
+        check_route "API (\${app} host)" "http://localhost:\${BASE_PORT}/api/" "200 301 302 404 405 502 503 504" "\$host"
+    else
+        path="\${APP_PATHS[idx]}"
+        check_route "Client \${app}" "http://localhost:\${BASE_PORT}\${path}" "200 301 302 404 502 503 504"
+    fi
 done
-check_route "API" "/api/" "200 301 302 404 405 502 503 504"
-check_route "Media API" "/api/auxiliary/media/" "200 301 302 404 405 502 503 504"
-check_route "WebSocket path" "/ws/" "400 426 502 503 504"
+if [ "\$GATEWAY_MODE" != "host" ]; then
+    check_route "API" "http://localhost:\${BASE_PORT}/api/" "200 301 302 404 405 502 503 504"
+    check_route "Media API" "http://localhost:\${BASE_PORT}/api/auxiliary/media/" "200 301 302 404 405 502 503 504"
+    check_route "WebSocket path" "http://localhost:\${BASE_PORT}/ws/" "400 426 502 503 504"
+fi
 EOF
 
     chmod +x scripts/*.sh
@@ -588,13 +668,47 @@ EOF
 generate_readme() {
     local i
     local rows=""
+    local mode="${SINFONIA_GATEWAY_MODE:-path}"
 
-    for i in "${!SINFONIA_APP_IDS[@]}"; do
-        rows+="| \`${SINFONIA_APP_PATHS[$i]}\` | ${SINFONIA_APP_UPSTREAMS[$i]} | Sinfonia client \`${SINFONIA_APP_IDS[$i]}\` |
+    if [ "$mode" = "host" ]; then
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            rows+="| \`${SINFONIA_APP_HOSTS[$i]}\` | \`/\` | ${SINFONIA_APP_UPSTREAMS[$i]} | Sinfonia client \`${SINFONIA_APP_IDS[$i]}\` |
 "
-    done
+        done
+        cat > README.md << EOF
+# Nginx Gateway Cluster
 
-    cat > README.md << EOF
+Generated Nginx reverse proxy / load balancer for the Arpeggio stack.
+
+**Host mode:** each Sinfonia client is served at \`/\` on its own domain(s). Shared \`/api/\` and \`/ws/\` are available on every domain. Gateway port: \`${nginx_external_port}\`.
+
+## Entry points
+
+| Domain(s) | Path | Upstream | Purpose |
+|-----------|------|----------|---------|
+${rows}| *(each domain)* | \`/api/\` | api | Maestro REST API |
+| *(each domain)* | \`/api/auxiliary/media/\` | api | Media uploads/downloads |
+| *(each domain)* | \`/ws/\` | maestroWebsocket | Maestro WebSocket server |
+
+DNS for each domain must point at this gateway. TLS is not generated here — terminate TLS at Cloudflare, a front proxy, or extend \`gateway.conf\` with certificates.
+
+## Start
+
+\`\`\`bash
+docker-compose up -d
+./scripts/wait-for-nginx.sh
+./scripts/health-check.sh
+./scripts/route-check.sh
+\`\`\`
+
+Shared network: \`${DOCKER_INTERNAL_NETWORK}\`
+EOF
+    else
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            rows+="| \`${SINFONIA_APP_PATHS[$i]}\` | ${SINFONIA_APP_UPSTREAMS[$i]} | Sinfonia client \`${SINFONIA_APP_IDS[$i]}\` |
+"
+        done
+        cat > README.md << EOF
 # Nginx Gateway Cluster
 
 Generated Nginx reverse proxy / load balancer for the Arpeggio stack.
@@ -620,6 +734,7 @@ docker-compose up -d
 
 Shared network: \`${DOCKER_INTERNAL_NETWORK}\`
 EOF
+    fi
 }
 
 main() {
@@ -629,10 +744,9 @@ main() {
     echo -e "${BLUE}================================================================${NC}"
     echo -e "${BLUE}              xCloud Nginx Gateway Cluster Generator${NC}"
     echo -e "${BLUE}================================================================${NC}"
-    echo -e "Path-based Sinfonia clients on a single gateway port."
-    echo -e "- First client -> ${GREEN}/${NC}"
-    echo -e "- Other clients -> ${GREEN}/<appId>App/${NC}"
-    echo -e "- ${GREEN}/api/${NC} and ${GREEN}/ws/${NC} -> Maestro"
+    echo -e "Path mode: first client -> ${GREEN}/${NC}, others -> ${GREEN}/<appId>App/${NC}"
+    echo -e "Host mode: each client -> its domain at ${GREEN}/${NC}"
+    echo -e "Shared: ${GREEN}/api/${NC} and ${GREEN}/ws/${NC} -> Maestro"
     echo -e "${BLUE}================================================================${NC}"
 
     get_user_input
@@ -654,8 +768,9 @@ main() {
     print_status "- README.md"
     echo ""
     print_status "To start the gateway, run: docker-compose up -d"
+    print_status "Gateway mode: ${SINFONIA_GATEWAY_MODE:-path}"
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        print_status "Sinfonia ${SINFONIA_APP_IDS[$i]}: $(sinfonia_app_public_url "$nginx_external_port" "${SINFONIA_APP_PATHS[$i]}")"
+        print_status "Sinfonia ${SINFONIA_APP_IDS[$i]}: $(sinfonia_app_public_url "$nginx_external_port" "$i")"
     done
     print_status "Shared network: ${DOCKER_INTERNAL_NETWORK}"
     echo ""

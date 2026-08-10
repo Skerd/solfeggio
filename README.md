@@ -28,7 +28,9 @@ Solfeggio does not contain application logic. It prepares a `deploy/` workspace 
 ./systemUp.sh
 ```
 
-After `systemUp.sh` completes, all selected Sinfonia clients share the Nginx gateway port (default `80`):
+After `systemUp.sh` completes, entry points depend on gateway mode:
+
+**Path mode** (default) — all clients share the Nginx gateway port (default `80`):
 
 - **First selected app** (usually `core`): `http://localhost:80/`
 - **Additional apps**: `http://localhost:80/<appId>App/` (e.g. `http://localhost:80/publicApp/`)
@@ -37,6 +39,10 @@ Example after selecting `core,public`:
 
 - **core:** `http://localhost/`
 - **public:** `http://localhost/publicApp/`
+
+**Host mode** — each client at `/` on its own domain (same gateway port), e.g.
+`dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al` → `http://dyeus.al/`, `http://panel.pronix.al/`, `http://pronix.al/`.
+Point DNS at the gateway; TLS is not generated here (Cloudflare / front proxy / extend `gateway.conf`).
 
 To tear down generated artifacts and start fresh:
 
@@ -53,7 +59,9 @@ Interactive wizard that:
 1. Prompts for **modules** to deploy (comma-separated, e.g. `eCommerce,propertyManagement`)
 2. Sets the shared **Docker internal network** name (default: `arpeggio_internal_network`)
 3. Clones or updates **Armonia**, **Maestro**, and **Sinfonia** core repos plus per-module repos from GitHub
-4. Prompts for **Sinfonia client apps** to deploy (comma-separated ids under `src/modules/*/apps/`, e.g. `core,public`)
+4. Prompts for **Sinfonia client apps** to deploy:
+   - Path mode: comma-separated ids under `src/modules/*/apps/` (e.g. `core,public`)
+   - Host mode: `id@domain` mounts (e.g. `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`)
 5. Generates `deploy/scripts/modules.manifest.json`, `sinfonia-apps.env`, and syncs Maestro build scripts
 6. Configures optional and required **infrastructure clusters**
 7. Copies and updates `apps/maestro/.env` into `deploy/maestro/.env`
@@ -139,7 +147,11 @@ solfeggio/
 
 ## Nginx gateway routes
 
-The gateway exposes **one host port** (default `80`). The first selected Sinfonia client is at `/`; every additional client is at `/<appId>App/` and is built with matching Vite `base`.
+The gateway exposes **one host port** (default `80`) in either **path** or **host** mode.
+
+### Path mode
+
+The first selected Sinfonia client is at `/`; every additional client is at `/<appId>App/` and is built with matching Vite `base`.
 
 | Path | Upstream | Purpose |
 |------|----------|---------|
@@ -150,7 +162,20 @@ The gateway exposes **one host port** (default `80`). The first selected Sinfoni
 | `/api/auxiliary/media/` | `maestroApi` | Media uploads/downloads |
 | `/ws/` | `maestroWebsocket` | WebSocket server |
 
-Client selection is stored in `deploy/scripts/sinfonia-apps.env` (and mirrored into `clusters/nginx/.env` as `SINFONIA_CLIENT_APPS`, e.g. `core@/,public@/publicApp/`).
+### Host mode
+
+Each client is a separate nginx `server_name` vhost at `/`, built with `VITE_BASE_PATH=/`. `/api/` and `/ws/` are available on every domain.
+
+| Domain | Path | Upstream |
+|--------|------|----------|
+| `dyeus.al` | `/` | `frontend-dyeus` |
+| `panel.pronix.al` | `/` | `frontend-core` |
+| `pronix.al` (+ aliases) | `/` | `frontend-public` |
+| *(each domain)* | `/api/`, `/ws/` | Maestro |
+
+Example selection: `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al|www.pronix.al`
+
+Client selection is stored in `deploy/scripts/sinfonia-apps.env` (and mirrored into `clusters/nginx/.env` as `SINFONIA_CLIENT_APPS`).
 
 See [clusters/nginx/README.md](clusters/nginx/README.md) for details after running `./deploy.sh`.
 

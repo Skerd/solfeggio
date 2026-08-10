@@ -156,13 +156,17 @@ validate_deploy_sources() {
         print_error "Invalid Sinfonia apps manifest: ${SINFONIA_APPS_ENV_FILE}"
         missing=1
     else
-        print_status "Sinfonia clients to deploy: $(build_sinfonia_client_apps_spec)"
+        print_status "Sinfonia clients to deploy: $(build_sinfonia_client_apps_spec) (mode=${SINFONIA_GATEWAY_MODE:-path})"
         for i in "${!SINFONIA_APP_IDS[@]}"; do
             if ! app_html="$(resolve_sinfonia_app_index_html "$SINFONIA_DIR" "${SINFONIA_APP_IDS[$i]}")"; then
                 print_error "Selected client \"${SINFONIA_APP_IDS[$i]}\" is missing under ${SINFONIA_DIR}/src/modules/*/apps/${SINFONIA_APP_IDS[$i]}/"
                 missing=1
             else
-                print_status "Found client ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_PATHS[$i]} (${app_html}) -> ${SINFONIA_APP_IMAGES[$i]}"
+                if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
+                    print_status "Found client ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_HOSTS[$i]} (${app_html}) -> ${SINFONIA_APP_IMAGES[$i]}"
+                else
+                    print_status "Found client ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_PATHS[$i]} (${app_html}) -> ${SINFONIA_APP_IMAGES[$i]}"
+                fi
             fi
         done
     fi
@@ -612,9 +616,9 @@ print_system_up_summary() {
     echo "  - ${DOCKER_INTERNAL_NETWORK}"
     echo ""
     if [ -f "${NGINX_CLUSTER_DIR}/docker-compose.yml" ]; then
-        echo -e "${BLUE}Public entry points (Nginx gateway port ${NGINX_EXTERNAL_PORT:-80})${NC}"
+        echo -e "${BLUE}Public entry points (Nginx gateway port ${NGINX_EXTERNAL_PORT:-80}, mode=${SINFONIA_GATEWAY_MODE:-path})${NC}"
         for i in "${!SINFONIA_APP_IDS[@]}"; do
-            echo "  - ${SINFONIA_APP_IDS[$i]}: $(sinfonia_app_public_url "${NGINX_EXTERNAL_PORT:-80}" "${SINFONIA_APP_PATHS[$i]}")"
+            echo "  - ${SINFONIA_APP_IDS[$i]}: $(sinfonia_app_public_url "${NGINX_EXTERNAL_PORT:-80}" "$i")"
         done
         echo ""
     fi
