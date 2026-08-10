@@ -33,7 +33,6 @@ MAESTRO_MODULES_DIR="${MAESTRO_DIR}/modules"
 MAESTRO_CORE_URL="https://github.com/Skerd/maestro_core.git"
 SINFONIA_DIR="${DEPLOY_DIR}/sinfonia"
 SINFONIA_MODULES_DIR="${SINFONIA_DIR}/src/modules"
-SINFONIA_APPS_DIR="${SINFONIA_DIR}/src/apps"
 SINFONIA_CORE_URL="https://github.com/Skerd/sinfonia_core.git"
 SINFONIA_APPS_ENV_FILE="${DEPLOY_DIR}/scripts/sinfonia-apps.env"
 KAFKA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/kafka"
@@ -675,11 +674,14 @@ configure_maestro_clamav_enabled() {
 }
 
 prompt_sinfonia_client_apps() {
-    local available default_ids_csv app_input gateway_port_input
+    local available default_ids_csv app_input gateway_port_input app_html
     local -a selected_ids=()
     local raw_ids id
 
-    available="$(discover_sinfonia_app_ids "$SINFONIA_APPS_DIR")"
+    if ! available="$(discover_sinfonia_app_ids "$SINFONIA_DIR")"; then
+        print_error "Failed to discover Sinfonia clients under ${SINFONIA_DIR}/src/modules/*/apps/"
+        exit 1
+    fi
     default_ids_csv="core"
     if load_sinfonia_apps_manifest "$SINFONIA_APPS_ENV_FILE" 2>/dev/null; then
         default_ids_csv="$(IFS=,; echo "${SINFONIA_APP_IDS[*]}")"
@@ -691,13 +693,13 @@ prompt_sinfonia_client_apps() {
     echo -e "Sinfonia client apps"
     echo -e "${BLUE}================================================================${NC}"
     echo ""
-    echo "Choose which Sinfonia clients under src/apps/ to build and publish."
+    echo "Choose which Sinfonia clients under src/modules/*/apps/ to build and publish."
     echo "All clients share one Nginx host port. The first app is served at / ;"
     echo "each additional app is served at /<appId>App/ (e.g. core,public -> / and /publicApp/)."
     if [ -n "$available" ]; then
         echo "Available apps in cloned Sinfonia: ${available}"
     else
-        print_warning "No apps discovered under ${SINFONIA_APPS_DIR} (expected folders with index.html)"
+        print_warning "No apps discovered under ${SINFONIA_DIR}/src/modules/*/apps/ (expected folders with index.html)"
     fi
     echo ""
 
@@ -718,8 +720,8 @@ prompt_sinfonia_client_apps() {
                 selected_ids=()
                 break
             fi
-            if [ ! -f "${SINFONIA_APPS_DIR}/${id}/index.html" ]; then
-                print_error "Unknown/missing Sinfonia client \"${id}\" (expected ${SINFONIA_APPS_DIR}/${id}/index.html)"
+            if ! app_html="$(resolve_sinfonia_app_index_html "$SINFONIA_DIR" "$id")"; then
+                print_error "Unknown/missing Sinfonia client \"${id}\" (expected ${SINFONIA_DIR}/src/modules/<module>/apps/${id}/index.html)"
                 selected_ids=()
                 break
             fi

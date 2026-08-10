@@ -255,24 +255,84 @@ load_sinfonia_apps_manifest() {
     return 0
 }
 
+# Resolve `src/modules/<module>/apps/<appId>/index.html` for a client id.
+# Args: sinfonia_root app_id
+# Prints the absolute index.html path on stdout; returns 1 if not found / duplicate.
+resolve_sinfonia_app_index_html() {
+    local sinfonia_root=$1
+    local app_id=$2
+    local modules_dir="${sinfonia_root}/src/modules"
+    local module_dir apps_dir app_root index_html
+    local -a matches=()
+
+    if [ -z "$app_id" ] || [ ! -d "$modules_dir" ]; then
+        return 1
+    fi
+
+    for module_dir in "$modules_dir"/*/; do
+        [ -d "$module_dir" ] || continue
+        apps_dir="${module_dir}apps"
+        app_root="${apps_dir}/${app_id}"
+        index_html="${app_root}/index.html"
+        if [ -d "$app_root" ] && [ -f "$index_html" ]; then
+            matches+=("$index_html")
+        fi
+    done
+
+    if [ "${#matches[@]}" -eq 0 ]; then
+        return 1
+    fi
+    if [ "${#matches[@]}" -gt 1 ]; then
+        echo "Duplicate Sinfonia client \"${app_id}\" under src/modules/*/apps/:" >&2
+        local m
+        for m in "${matches[@]}"; do
+            echo "  - ${m}" >&2
+        done
+        return 1
+    fi
+
+    echo "${matches[0]}"
+    return 0
+}
+
+# Discover Vite clients at `src/modules/<module>/apps/<appId>/index.html`.
+# Args: sinfonia_root (directory containing src/modules)
+# Prints comma-separated app ids (sorted).
 discover_sinfonia_app_ids() {
-    local apps_dir=$1
-    local dir name
+    local sinfonia_root=$1
+    local modules_dir="${sinfonia_root}/src/modules"
+    local module_dir apps_dir app_dir name index_html existing
     local -a found=()
 
-    if [ ! -d "$apps_dir" ]; then
+    if [ ! -d "$modules_dir" ]; then
         echo ""
         return 0
     fi
 
-    for dir in "$apps_dir"/*/; do
-        [ -d "$dir" ] || continue
-        name="$(basename "$dir")"
-        if [ -f "${dir}index.html" ]; then
+    for module_dir in "$modules_dir"/*/; do
+        [ -d "$module_dir" ] || continue
+        apps_dir="${module_dir}apps"
+        [ -d "$apps_dir" ] || continue
+        for app_dir in "$apps_dir"/*/; do
+            [ -d "$app_dir" ] || continue
+            name="$(basename "$app_dir")"
+            index_html="${app_dir}index.html"
+            [ -f "$index_html" ] || continue
+            for existing in "${found[@]+"${found[@]}"}"; do
+                if [ "$existing" = "$name" ]; then
+                    echo "Duplicate Sinfonia client \"${name}\" under src/modules/*/apps/" >&2
+                    return 1
+                fi
+            done
             found+=("$name")
-        fi
+        done
     done
 
-    local IFS=,
-    echo "${found[*]}"
+    if [ "${#found[@]}" -eq 0 ]; then
+        echo ""
+        return 0
+    fi
+
+    # Stable, sorted output for prompts/defaults.
+    printf '%s\n' "${found[@]}" | LC_ALL=C sort | paste -sd, -
 }

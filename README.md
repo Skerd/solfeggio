@@ -53,7 +53,7 @@ Interactive wizard that:
 1. Prompts for **modules** to deploy (comma-separated, e.g. `eCommerce,propertyManagement`)
 2. Sets the shared **Docker internal network** name (default: `arpeggio_internal_network`)
 3. Clones or updates **Armonia**, **Maestro**, and **Sinfonia** core repos plus per-module repos from GitHub
-4. Prompts for **Sinfonia client apps** to deploy (comma-separated ids under `src/apps/`, e.g. `core,public`)
+4. Prompts for **Sinfonia client apps** to deploy (comma-separated ids under `src/modules/*/apps/`, e.g. `core,public`)
 5. Generates `deploy/scripts/modules.manifest.json`, `sinfonia-apps.env`, and syncs Maestro build scripts
 6. Configures optional and required **infrastructure clusters**
 7. Copies and updates `apps/maestro/.env` into `deploy/maestro/.env`
@@ -97,7 +97,7 @@ Validates the prepared `deploy/` folder, then:
 
 | Container | Purpose |
 |-----------|---------|
-| `frontend-<appId>` | Built SPA for `src/apps/<appId>` (internal port 80) |
+| `frontend-<appId>` | Built SPA for `src/modules/<module>/apps/<appId>` (internal port 80) |
 
 Example: selecting `core,public` yields `frontend-core` and `frontend-public`.
 

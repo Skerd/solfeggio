@@ -158,12 +158,11 @@ validate_deploy_sources() {
     else
         print_status "Sinfonia clients to deploy: $(build_sinfonia_client_apps_spec)"
         for i in "${!SINFONIA_APP_IDS[@]}"; do
-            app_html="${SINFONIA_DIR}/src/apps/${SINFONIA_APP_IDS[$i]}/index.html"
-            if [ ! -f "$app_html" ]; then
-                print_error "Selected client \"${SINFONIA_APP_IDS[$i]}\" is missing ${app_html}"
+            if ! app_html="$(resolve_sinfonia_app_index_html "$SINFONIA_DIR" "${SINFONIA_APP_IDS[$i]}")"; then
+                print_error "Selected client \"${SINFONIA_APP_IDS[$i]}\" is missing under ${SINFONIA_DIR}/src/modules/*/apps/${SINFONIA_APP_IDS[$i]}/"
                 missing=1
             else
-                print_status "Found client ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_PATHS[$i]} -> ${SINFONIA_APP_IMAGES[$i]}"
+                print_status "Found client ${SINFONIA_APP_IDS[$i]} @ ${SINFONIA_APP_PATHS[$i]} (${app_html}) -> ${SINFONIA_APP_IMAGES[$i]}"
             fi
         done
     fi
