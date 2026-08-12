@@ -260,6 +260,12 @@ EOF
     done
 
     print_status " 2. Adding ${GREEN}Sentinel${NC} services"
+
+    # Wait until every master hostname resolves (Redis 7.2 requires this at config load)
+    local wait_masters_cmd=""
+    for master_id in $(seq 1 $num_masters); do
+        wait_masters_cmd="${wait_masters_cmd}until getent hosts redis-master-${master_id} >/dev/null 2>&1; do echo 'waiting for redis-master-${master_id} DNS...'; sleep 2; done; "
+    done
     
     # Generate Sentinel nodes
     for sentinel_id in $(seq 1 $num_sentinels); do
@@ -270,16 +276,19 @@ EOF
     hostname: redis-sentinel-${sentinel_id}
     ports:
       - "$((sentinel_port + sentinel_id - 1)):26379"
-    command: sh -c "sleep 30 && redis-sentinel /usr/local/etc/redis/sentinel.conf"
+    command: sh -c "${wait_masters_cmd}redis-sentinel /usr/local/etc/redis/sentinel.conf"
     volumes:
       - ./scripts/sentinel-${sentinel_id}.conf:/usr/local/etc/redis/sentinel.conf
       - redis-sentinel-${sentinel_id}-data:/data
     restart: always
     depends_on:
 EOF
-        # Add dependencies for all Redis masters
+        # Add dependencies for all Redis masters (wait until healthy)
         for master_id in $(seq 1 $num_masters); do
-            echo "      - redis-master-${master_id}" >> docker-compose.yml
+            cat >> docker-compose.yml << EOF
+      redis-master-${master_id}:
+        condition: service_healthy
+EOF
         done
         cat >> docker-compose.yml << EOF
     networks:
@@ -337,8 +346,11 @@ generate_sentinel_configs() {
     local num_sentinels=$2
     local redis_password=$3
     local redis_username=$4
+    # Quorum = majority of sentinels (required for failover agreement)
+    local quorum=$((num_sentinels / 2 + 1))
 
     print_status "Generating Sentinel configurations..."
+    print_status " Using sentinel quorum: ${GREEN}${quorum}${NC} (of ${num_sentinels} sentinels)"
 
     print_status " 1. Creating ${GREEN}scripts${NC} directory"
     mkdir -p scripts
@@ -347,22 +359,19 @@ generate_sentinel_configs() {
     for sentinel_id in $(seq 1 $num_sentinels); do
         print_status " 2. Creating ${GREEN}sentinel-${sentinel_id}.conf${NC}"
         ensure_regular_file_path "scripts/sentinel-${sentinel_id}.conf"
+
+        # Redis 6.2+/7.x defaults resolve-hostnames to no — Docker service
+        # names like redis-master-1 then fatally fail config load.
         cat > scripts/sentinel-${sentinel_id}.conf << EOF
 port 26379
 dir /data
-sentinel monitor mymaster-1 redis-master-1 6379 2
-sentinel down-after-milliseconds mymaster-1 5000
-sentinel failover-timeout mymaster-1 10000
-sentinel parallel-syncs mymaster-1 1
-sentinel auth-pass mymaster-1 ${redis_password}
+sentinel resolve-hostnames yes
+sentinel announce-hostnames yes
 EOF
-        if [ -n "$redis_username" ]; then
-            echo "sentinel auth-user mymaster-1 ${redis_username}" >> scripts/sentinel-${sentinel_id}.conf
-        fi
-        # Add additional masters if more than 1
-        for master_id in $(seq 2 $num_masters); do
+
+        for master_id in $(seq 1 $num_masters); do
             cat >> scripts/sentinel-${sentinel_id}.conf << EOF
-sentinel monitor mymaster-${master_id} redis-master-${master_id} 6379 2
+sentinel monitor mymaster-${master_id} redis-master-${master_id} 6379 ${quorum}
 sentinel down-after-milliseconds mymaster-${master_id} 5000
 sentinel failover-timeout mymaster-${master_id} 10000
 sentinel parallel-syncs mymaster-${master_id} 1
