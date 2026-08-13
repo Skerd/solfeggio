@@ -422,6 +422,28 @@ start_full_stack() {
     start_gateway_cluster
 }
 
+restart_nginx_gateway() {
+    local compose_file="${NGINX_CLUSTER_DIR}/docker-compose.yml"
+
+    if [ ! -f "$compose_file" ]; then
+        print_status "Skipping Nginx restart: no generated docker-compose.yml"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}================================================================${NC}"
+    echo -e "${BLUE}                 Restarting Nginx gateway${NC}"
+    echo -e "${BLUE}================================================================${NC}"
+    echo ""
+
+    print_status "Restarting Nginx so it reloads current Maestro and Sinfonia upstreams"
+    (
+        cd "$NGINX_CLUSTER_DIR"
+        docker_compose restart
+    )
+    print_status "Nginx gateway restarted"
+}
+
 generate_servers_compose() {
     print_status "Generating servers compose file: ${SERVERS_COMPOSE_FILE}"
 
@@ -653,6 +675,7 @@ main() {
     build_sinfonia_image
     generate_application_compose_files
     start_full_stack
+    restart_nginx_gateway
     print_system_up_summary
 }
 
