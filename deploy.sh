@@ -1309,6 +1309,7 @@ configure_maestro_ai_assistant_enabled() {
     base_url="http://${ollama_host}:${OLLAMA_INTERNAL_PORT}"
 
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_ENABLED" "true"
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_PROVIDER" "ollama"
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_BASE_URL" "$base_url"
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_MODEL" "$ollama_model"
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_TIMEOUT_MS" "$timeout_ms"
