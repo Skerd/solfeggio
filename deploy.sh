@@ -942,17 +942,28 @@ setup_nginx_gateway() {
 }
 
 configure_maestro_nginx_gateway() {
-    local gateway_host="nginx-gateway-1"
     local gateway_port="${NGINX_EXTERNAL_PORT:-80}"
-    local gateway_url="http://${gateway_host}:${gateway_port}"
+    local existing_host
+    local client_urls
+    local client_host
 
-    # Prefer the first public domain in host mode (redirects / emails / Stripe, etc.).
-    if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ] && [ "${#SINFONIA_APP_IDS[@]}" -gt 0 ]; then
-        gateway_url="$(sinfonia_app_public_url "$gateway_port" 0)"
+    existing_host="$(read_env_value "$MAESTRO_ENV_FILE" "CLIENT_HOST")"
+    client_urls="$(sinfonia_client_urls_spec "$gateway_port" "$existing_host")"
+    client_host="$(sinfonia_panel_client_host "$gateway_port" "$existing_host")"
+
+    if [ -n "$client_urls" ]; then
+        set_env_var "$MAESTRO_ENV_FILE" "SINFONIA_CLIENT_URLS" "$client_urls"
+        print_status "Maestro SINFONIA_CLIENT_URLS set to ${client_urls}"
+    else
+        print_warning "No public Sinfonia client origins (host mode needs real domains). SINFONIA_CLIENT_URLS not updated."
     fi
 
-    set_env_var "$MAESTRO_ENV_FILE" "CLIENT_HOST" "$gateway_url"
-    print_status "Maestro CLIENT_HOST set to ${gateway_url}"
+    if [ -n "$client_host" ]; then
+        set_env_var "$MAESTRO_ENV_FILE" "CLIENT_HOST" "$client_host"
+        print_status "Maestro CLIENT_HOST set to ${client_host} (core panel origin)"
+    else
+        print_warning "Leaving CLIENT_HOST unchanged (${existing_host:-empty}); selected clients have no public origin"
+    fi
 }
 
 setup_mandatory_nginx_gateway() {
@@ -1084,7 +1095,7 @@ print_deploy_summary() {
     local deploy_maestro_env="${MAESTRO_DIR}/.env"
     local module i
     local kafka_enabled redis_nodes file_scanner mongo_host mongo_db
-    local api_port websocket_port client_host
+    local api_port websocket_port client_host client_urls
 
     kafka_enabled="$(read_env_value "$deploy_maestro_env" "KAFKA_ENABLED")"
     redis_nodes="$(read_env_value "$deploy_maestro_env" "REDIS_ROOT_NODES")"
@@ -1094,6 +1105,7 @@ print_deploy_summary() {
     api_port="$(read_env_value "$deploy_maestro_env" "SERVER_PORT")"
     websocket_port="$(read_env_value "$deploy_maestro_env" "WEBSOCKET_PORT")"
     client_host="$(read_env_value "$deploy_maestro_env" "CLIENT_HOST")"
+    client_urls="$(read_env_value "$deploy_maestro_env" "SINFONIA_CLIENT_URLS")"
 
     echo ""
     echo -e "${GREEN}================================================================${NC}"
@@ -1179,6 +1191,7 @@ print_deploy_summary() {
     echo "  - WebSocket:  ${MAESTRO_WEBSOCKET_CONTAINER}:${websocket_port:-82}"
     echo "  - Prometheus: ${PROMETHEUS_CONTAINER}"
     echo "  - Client URL: ${client_host}"
+    echo "  - Client URLs: ${client_urls:-n/a}"
     echo ""
 
     echo -e "${BLUE}Start infrastructure clusters${NC}"

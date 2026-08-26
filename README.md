@@ -204,7 +204,8 @@ Maestro environment is managed through `apps/maestro/.env`. During `./deploy.sh`
 - `KAFKA_*` — brokers, SASL credentials, CA path (when Kafka is enabled)
 - `REDIS_*` — root nodes, auth (when Redis is enabled)
 - `CLAMAV_*` — host/port (when ClamAV is enabled)
-- `CLIENT_HOST` — public URL via Nginx gateway
+- `CLIENT_HOST` — public origin of the **core/panel** SPA (auth emails, Stripe). Derived from the selected `core` client's domain in host mode (`https://panel.pronix.al`). Never `localhost` or the Docker-internal gateway. Left unchanged when no public origin exists (path mode without a real domain).
+- `SINFONIA_CLIENT_URLS` — per-app map written from the same selection, e.g. `core=https://panel.pronix.al,public=https://pronix.al,dyeus=https://dyeus.al`. Maestro uses this so shop/public/panel mail links hit the matching SPA. `CLIENT_NAME` is left as-is.
 - `ENABLED_MODULES` — comma-separated module list matching the deploy selection
 
 The finalized env is copied to `deploy/maestro/.env` for container runtime.

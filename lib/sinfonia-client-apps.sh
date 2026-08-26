@@ -130,6 +130,106 @@ sinfonia_app_public_url() {
     fi
 }
 
+# Index of a selected Sinfonia client id, or empty if it was not selected.
+sinfonia_app_index_by_id() {
+    local want="$1"
+    local i
+    for i in "${!SINFONIA_APP_IDS[@]}"; do
+        if [ "${SINFONIA_APP_IDS[$i]}" = "$want" ]; then
+            echo "$i"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# True for hosts that email recipients / Stripe cannot reach.
+sinfonia_url_is_loopback() {
+    local url="${1:-}"
+    case "$url" in
+        ""|*localhost*|*127.0.0.1*|*"[::1]"*|*0.0.0.0*|*nginx-gateway*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# Public browser origin for the app at index $2. Empty when we only know a
+# loopback/internal host — never emit localhost or nginx-gateway for Maestro.
+# $3 (optional) is an existing public origin used to hang path-mode prefixes on.
+sinfonia_app_browser_origin() {
+    local gateway_port="${1:-80}"
+    local idx="${2:-0}"
+    local public_origin="${3:-}"
+    local host path
+
+    if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
+        host="$(sinfonia_app_primary_host "$idx")"
+        if [ -z "$host" ] || sinfonia_url_is_loopback "$host"; then
+            echo ""
+            return 0
+        fi
+        if [ "$gateway_port" = "80" ] || [ "$gateway_port" = "443" ]; then
+            echo "https://${host}"
+        else
+            echo "http://${host}:${gateway_port}"
+        fi
+        return 0
+    fi
+
+    public_origin="${public_origin%/}"
+    if sinfonia_url_is_loopback "$public_origin"; then
+        echo ""
+        return 0
+    fi
+
+    path="${SINFONIA_APP_PATHS[$idx]:-/}"
+    path="${path%/}"
+    if [ -z "$path" ] || [ "$path" = "/" ]; then
+        echo "$public_origin"
+    else
+        echo "${public_origin}${path}"
+    fi
+}
+
+# id=origin,id=origin for every selected client that has a public URL.
+sinfonia_client_urls_spec() {
+    local gateway_port="${1:-80}"
+    local public_origin="${2:-}"
+    local i origin
+    local -a parts=()
+
+    for i in "${!SINFONIA_APP_IDS[@]}"; do
+        origin="$(sinfonia_app_browser_origin "$gateway_port" "$i" "$public_origin")"
+        [ -n "$origin" ] || continue
+        parts+=("${SINFONIA_APP_IDS[$i]}=${origin}")
+    done
+
+    if [ "${#parts[@]}" -eq 0 ]; then
+        echo ""
+        return 0
+    fi
+    local IFS=,
+    echo "${parts[*]}"
+}
+
+# Core panel origin for CLIENT_HOST. Empty when core has no public URL.
+sinfonia_panel_client_host() {
+    local gateway_port="${1:-80}"
+    local public_origin="${2:-}"
+    local idx=""
+
+    idx="$(sinfonia_app_index_by_id "core" || true)"
+    if [ -z "$idx" ]; then
+        idx="0"
+    fi
+    if [ "${#SINFONIA_APP_IDS[@]}" -eq 0 ]; then
+        echo ""
+        return 0
+    fi
+    sinfonia_app_browser_origin "$gateway_port" "$idx" "$public_origin"
+}
+
 # Parses SINFONIA_CLIENT_APPS into:
 #   SINFONIA_GATEWAY_MODE (path|host)
 #   SINFONIA_APP_IDS / SINFONIA_APP_PATHS / SINFONIA_APP_BASE_PATHS / SINFONIA_APP_HOSTS
