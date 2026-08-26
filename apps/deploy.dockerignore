@@ -1,0 +1,14 @@
+# Copied to deploy/.dockerignore by systemUp.sh (Docker reads this from the build context).
+**/.git
+**/.gitignore
+**/.gitattributes
+**/node_modules
+**/dist
+**/.vite
+**/.turbo
+**/.DS_Store
+**/coverage
+**/.env
+**/.env.*
+**/.build-logs
+**/*.log

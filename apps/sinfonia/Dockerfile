@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Build from the deploy folder (must contain armonia/ and sinfonia/):
 #   docker build -f apps/sinfonia/Dockerfile \
 #     --build-arg VITE_SINFONIA_APP=<appId> \
@@ -5,11 +6,24 @@
 #     -t arpeggio-frontend-<appId>:latest deploy/
 #
 # Gateway strips non-root URL prefixes, so the container always serves at `/`.
+# Vite app id / base path ARGs are declared after npm install so core/public/dyeus
+# share cached dependency layers.
 
 FROM node:22-alpine AS build
 
 # Large Vite/Rollup graphs (15k+ modules) exceed Node's default ~2 GiB heap during chunk rendering.
 ENV NODE_OPTIONS="--max-old-space-size=6144"
+
+WORKDIR /armonia
+COPY armonia/package.json ./
+RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund
+COPY armonia ./
+RUN npm run build
+
+WORKDIR /sinfonia
+COPY sinfonia/package.json ./
+RUN --mount=type=cache,target=/root/.npm npm install --legacy-peer-deps --no-audit --no-fund
+COPY sinfonia ./
 
 ARG VITE_SINFONIA_APP=core
 ENV VITE_SINFONIA_APP=$VITE_SINFONIA_APP
@@ -17,22 +31,6 @@ ENV VITE_SINFONIA_APP=$VITE_SINFONIA_APP
 # Must match the gateway URL path for this client (`/` or `/publicApp/`, etc.).
 ARG VITE_BASE_PATH=/
 ENV VITE_BASE_PATH=$VITE_BASE_PATH
-
-WORKDIR /armonia
-
-COPY armonia ./
-
-RUN npm i
-
-RUN npm run build
-
-WORKDIR /sinfonia
-
-COPY sinfonia ./
-
-WORKDIR /sinfonia
-
-RUN npm install --legacy-peer-deps
 
 RUN npm run build
 

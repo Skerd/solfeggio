@@ -62,24 +62,43 @@ MAESTRO_TELEGRAM_CONTAINER="maestroTelegram"
 
 STARTED_CLUSTERS=()
 DOCKER_BUILD_NO_CACHE=false
+SKIP_MAESTRO_BUILD=false
+SKIP_FRONTEND_BUILD=false
+
+print_usage() {
+    echo "Usage: $0 [--no-cache] [--skip-maestro] [--skip-frontend]"
+    echo "  --no-cache       Build Maestro and selected Sinfonia client images without Docker layer cache"
+    echo "  --skip-maestro   Reuse the existing Maestro image (SPA-only changes)"
+    echo "  --skip-frontend  Reuse existing Sinfonia images (API-only changes)"
+}
 
 for arg in "$@"; do
     case "$arg" in
         --no-cache)
             DOCKER_BUILD_NO_CACHE=true
             ;;
+        --skip-maestro|--frontend-only)
+            SKIP_MAESTRO_BUILD=true
+            ;;
+        --skip-frontend|--maestro-only)
+            SKIP_FRONTEND_BUILD=true
+            ;;
         -h|--help)
-            echo "Usage: $0 [--no-cache]"
-            echo "  --no-cache  Build Maestro and selected Sinfonia client images without Docker layer cache"
+            print_usage
             exit 0
             ;;
         *)
             print_error "Unknown argument: $arg"
-            echo "Usage: $0 [--no-cache]"
+            print_usage
             exit 1
             ;;
     esac
 done
+
+if [ "$SKIP_MAESTRO_BUILD" = "true" ] && [ "$SKIP_FRONTEND_BUILD" = "true" ]; then
+    print_error "Cannot combine --skip-maestro and --skip-frontend."
+    exit 1
+fi
 
 read_env_value() {
     local file="$1"
@@ -269,6 +288,33 @@ sync_maestro_build_scripts() {
     print_status "Synced Maestro build scripts to ${scripts_dest}"
 }
 
+install_deploy_dockerignore() {
+    local src="${SCRIPT_DIR}/apps/deploy.dockerignore"
+    local dest="${DEPLOY_DIR}/.dockerignore"
+
+    if [ ! -f "$src" ]; then
+        print_warning "Missing ${src}; Docker build context will not be pruned"
+        return 0
+    fi
+
+    cp "$src" "$dest"
+    print_status "Installed Docker build ignore file: ${dest}"
+}
+
+require_docker_image() {
+    local image="$1"
+    local label="$2"
+
+    if docker image inspect "$image" >/dev/null 2>&1; then
+        print_status "Reusing existing ${label} image: ${image}"
+        return 0
+    fi
+
+    print_error "No ${label} image named ${image}."
+    print_error "Run ./systemUp.sh without skip flags once to build it."
+    exit 1
+}
+
 build_maestro_image() {
     echo ""
     echo -e "${BLUE}================================================================${NC}"
@@ -317,7 +363,12 @@ build_sinfonia_app_image() {
 }
 
 build_sinfonia_image() {
-    local i
+    local i pid
+    local -a pids=()
+    local -a app_ids=()
+    local -a log_files=()
+    local logs_dir="${DEPLOY_DIR}/.build-logs"
+    local failed=0
 
     echo ""
     echo -e "${BLUE}================================================================${NC}"
@@ -325,9 +376,43 @@ build_sinfonia_image() {
     echo -e "${BLUE}================================================================${NC}"
     echo ""
 
+    if [ "${#SINFONIA_APP_IDS[@]}" -le 1 ]; then
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            build_sinfonia_app_image "${SINFONIA_APP_IDS[$i]}" "${SINFONIA_APP_IMAGES[$i]}" "${SINFONIA_APP_BASE_PATHS[$i]}"
+        done
+        return 0
+    fi
+
+    mkdir -p "$logs_dir"
+    print_status "Building ${#SINFONIA_APP_IDS[@]} Sinfonia images in parallel (shared npm layers)"
+
+    local app_id log_file
     for i in "${!SINFONIA_APP_IDS[@]}"; do
-        build_sinfonia_app_image "${SINFONIA_APP_IDS[$i]}" "${SINFONIA_APP_IMAGES[$i]}" "${SINFONIA_APP_BASE_PATHS[$i]}"
+        app_id="${SINFONIA_APP_IDS[$i]}"
+        log_file="${logs_dir}/${app_id}.log"
+        print_status "Starting ${app_id} -> ${SINFONIA_APP_IMAGES[$i]} (log: ${log_file})"
+        (
+            build_sinfonia_app_image "$app_id" "${SINFONIA_APP_IMAGES[$i]}" "${SINFONIA_APP_BASE_PATHS[$i]}"
+        ) >"$log_file" 2>&1 &
+        pids+=("$!")
+        app_ids+=("$app_id")
+        log_files+=("$log_file")
     done
+
+    for i in "${!pids[@]}"; do
+        pid="${pids[$i]}"
+        if wait "$pid"; then
+            print_status "Sinfonia ${app_ids[$i]} image built successfully"
+        else
+            print_error "Sinfonia ${app_ids[$i]} build failed. Last log lines:"
+            tail -n 80 "${log_files[$i]}" || true
+            failed=1
+        fi
+    done
+
+    if [ "$failed" -ne 0 ]; then
+        exit 1
+    fi
 }
 
 validate_cluster_bind_mounts() {
@@ -667,12 +752,29 @@ main() {
     echo -e "${BLUE}                    Arpeggio systemUp${NC}"
     echo -e "${BLUE}================================================================${NC}"
 
+    export DOCKER_BUILDKIT=1
+
     validate_deploy_sources
     load_internal_network_name
     ensure_internal_network
     prepare_maestro_build_context
-    build_maestro_image
-    build_sinfonia_image
+    install_deploy_dockerignore
+
+    if [ "$SKIP_MAESTRO_BUILD" = "true" ]; then
+        require_docker_image "$MAESTRO_IMAGE" "Maestro"
+    else
+        build_maestro_image
+    fi
+
+    if [ "$SKIP_FRONTEND_BUILD" = "true" ]; then
+        local i
+        for i in "${!SINFONIA_APP_IDS[@]}"; do
+            require_docker_image "${SINFONIA_APP_IMAGES[$i]}" "Sinfonia ${SINFONIA_APP_IDS[$i]}"
+        done
+    else
+        build_sinfonia_image
+    fi
+
     generate_application_compose_files
     start_full_stack
     restart_nginx_gateway

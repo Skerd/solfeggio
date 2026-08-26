@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Build from the deploy folder (must contain armonia/ and maestro/):
 #   docker build -f apps/maestro/Dockerfile -t arpeggio-maestro:latest deploy/
 #
@@ -37,28 +38,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Emscripten/OpenCV.js allocates a large static heap; avoid OOM during require() in small containers.
 ENV NODE_OPTIONS="--max-old-space-size=6144"
 
-COPY armonia ./armonia
+# Armonia deps — cached unless package.json changes.
 WORKDIR /armonia
-RUN npm i
+COPY armonia/package.json ./
+RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund
+
 # Zod v4: explicit ZodPipe return type on preprocess() fails tsc; infer from z.preprocess().
+COPY armonia ./
 RUN sed -i 's/function withNumericFormDataPreprocess<T extends z.ZodTypeAny>(inner: T): z.ZodPipe<z.ZodTransform<unknown, unknown>, T> {/function withNumericFormDataPreprocess<T extends z.ZodTypeAny>(inner: T) {/' src/modules/core/helpers/zodBuilder.ts
 RUN npm run build
 
-WORKDIR /
-COPY maestro ./maestro
-COPY scripts/ ./maestro/scripts/
-
+# Maestro deps + native addons — cached unless package.json changes (OpenCV compile lives here).
 WORKDIR /maestro
-
-# Same sequence as scripts/npm-install-with-native.sh: plain npm install runs node-gyp on @u4/opencv4nodejs too early.
-# No package-lock.json in repo today — use install (switch to `npm ci` once a lockfile is committed).
-RUN npm install --no-audit --no-fund --ignore-scripts
+COPY maestro/package.json ./
+COPY scripts/rebuild-opencv4nodejs.sh ./scripts/rebuild-opencv4nodejs.sh
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund --ignore-scripts
 
 RUN npm rebuild bcrypt canvas sharp --foreground-scripts
 
 RUN chmod +x scripts/rebuild-opencv4nodejs.sh \
     && npm run rebuild:opencv4nodejs \
     && test -n "$(find node_modules/@u4/opencv4nodejs/build -name opencv4nodejs.node -print -quit)"
+
+COPY maestro ./
+COPY scripts/ ./scripts/
 
 EXPOSE 81
 
