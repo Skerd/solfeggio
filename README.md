@@ -61,7 +61,7 @@ Interactive wizard that:
 3. Clones or updates **Armonia**, **Maestro**, and **Sinfonia** core repos plus per-module repos from GitHub
 4. Prompts for **Sinfonia client apps** to deploy:
    - Path mode: comma-separated ids under `src/modules/*/apps/` (e.g. `core,public`)
-   - Host mode: `id@domain` mounts (e.g. `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`)
+   - Host mode: `id@domain` mounts (e.g. `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`). `www.` is added automatically.
 5. Generates `deploy/scripts/modules.manifest.json`, `sinfonia-apps.env`, and syncs Maestro build scripts
 6. Configures optional and required **infrastructure clusters**
 7. Copies and updates `apps/maestro/.env` into `deploy/maestro/.env`
@@ -180,10 +180,12 @@ Each client is a separate nginx `server_name` vhost at `/`, built with `VITE_BAS
 |--------|------|----------|
 | `dyeus.al` | `/` | `frontend-dyeus` |
 | `panel.pronix.al` | `/` | `frontend-core` |
-| `pronix.al` (+ aliases) | `/` | `frontend-public` |
+| `pronix.al` (+ `www.pronix.al`) | `/` | `frontend-public` |
 | *(each domain)* | `/api/`, `/ws/` | Maestro |
 
-Example selection: `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al|www.pronix.al`
+Example selection: `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`
+
+`www.<domain>` is paired automatically (`dyeus.al` also serves `www.dyeus.al`). Extra aliases still use `|` (`public@pronix.al|shop.pronix.al`). Unmatched Host headers return 404 instead of the first client's SPA.
 
 Client selection is stored in `deploy/scripts/sinfonia-apps.env` (and mirrored into `clusters/nginx/.env` as `SINFONIA_CLIENT_APPS`).
 

@@ -9,7 +9,8 @@
 #
 # Host mode (one domain per SPA, each at /):
 #   dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al
-#   Aliases: public@pronix.al|www.pronix.al
+#   www.<host> is paired automatically (dyeus.al ↔ www.dyeus.al).
+#   Extra aliases: public@pronix.al|shop.pronix.al
 #
 # Path-mode non-root apps are built with VITE_BASE_PATH matching their URL path.
 # Host-mode apps are always built with VITE_BASE_PATH=/.
@@ -71,16 +72,56 @@ is_sinfonia_host_mount() {
     return 0
 }
 
-# "pronix.al|www.pronix.al" → "pronix.al www.pronix.al" (nginx server_name)
+# Apex/subdomain ↔ www pair used as an nginx server_name alias.
+# dyeus.al → www.dyeus.al ; www.pronix.al → pronix.al ; localhost/IPs unchanged.
+sinfonia_paired_www_host() {
+    local host="${1:-}"
+    if [ -z "$host" ] || [ "$host" = "localhost" ] || [[ "$host" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ "$host" == www. ]]; then
+        echo ""
+        return 0
+    fi
+    if [[ "$host" == www.* ]]; then
+        echo "${host#www.}"
+        return 0
+    fi
+    echo "www.${host}"
+}
+
+# "pronix.al|shop.pronix.al" → "pronix.al www.pronix.al shop.pronix.al www.shop.pronix.al"
+# Primary host stays first. www pairs are added automatically so unmatched www.*
+# Host headers cannot fall through to another client's default_server.
 normalize_sinfonia_hosts() {
     local raw="${1:-}"
-    local host
+    local host pair
     local -a hosts=()
+
+    _sinfonia_hosts_contains() {
+        local needle="$1"
+        local h
+        for h in "${hosts[@]+"${hosts[@]}"}"; do
+            if [ "$h" = "$needle" ]; then
+                return 0
+            fi
+        done
+        return 1
+    }
+
     raw="$(echo "$raw" | tr -d '[:space:]' | tr '|' ' ')"
     for host in $raw; do
         [ -n "$host" ] || continue
-        hosts+=("$host")
+        if ! _sinfonia_hosts_contains "$host"; then
+            hosts+=("$host")
+        fi
+        pair="$(sinfonia_paired_www_host "$host")"
+        if [ -n "$pair" ] && ! _sinfonia_hosts_contains "$pair"; then
+            hosts+=("$pair")
+        fi
     done
+    unset -f _sinfonia_hosts_contains
     if [ "${#hosts[@]}" -eq 0 ]; then
         return 1
     fi

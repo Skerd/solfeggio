@@ -245,7 +245,8 @@ get_user_input() {
     echo -e ""
     echo -e "Path mode: ${GREEN}core,public${NC}  (first at /, others at /<appId>App/)"
     echo -e "Host mode: ${GREEN}dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al${NC}"
-    echo -e "Aliases:   ${GREEN}public@pronix.al|www.pronix.al${NC}"
+    echo -e "www aliases are added automatically (dyeus.al ↔ www.dyeus.al)."
+    echo -e "Extra aliases: ${GREEN}public@pronix.al|shop.pronix.al${NC}"
     echo -e ""
 
     while true; do
@@ -406,13 +407,29 @@ generate_gateway_conf() {
         generate_upstream_block "maestroWebsocket" "$WEBSOCKET_UPSTREAM_HOST" "$WEBSOCKET_UPSTREAM_PORT" "$num_websocket_backends" "$websocket_method_line"
 
         if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
+            # Never make a client the default_server. Unmatched Host headers
+            # (forgotten www, typos, raw IP) used to steal the first SPA —
+            # e.g. www.dyeus.al serving pronix.al when public was listed first.
+            cat <<EOF
+server {
+    listen ${NGINX_LISTEN_PORT} default_server;
+    server_name _;
+
+    location = /nginx-health {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\\n";
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+EOF
             for i in "${!SINFONIA_APP_IDS[@]}"; do
                 server_names="${SINFONIA_APP_HOSTS[$i]}"
-                if [ "$i" -eq 0 ]; then
-                    listen_opts="${NGINX_LISTEN_PORT} default_server"
-                else
-                    listen_opts="${NGINX_LISTEN_PORT}"
-                fi
+                listen_opts="${NGINX_LISTEN_PORT}"
                 cat <<EOF
 server {
     listen ${listen_opts};
@@ -489,9 +506,15 @@ EOF
 }
 
 generate_docker_compose() {
-    local i external_port
+    local i external_port health_path
 
     print_status "Generating docker-compose.yml..."
+
+    if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
+        health_path="/nginx-health"
+    else
+        health_path="/"
+    fi
 
     cat > docker-compose.yml << EOF
 version: '3.8'
@@ -514,7 +537,7 @@ EOF
     networks:
       - arpeggio-internal
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:${NGINX_LISTEN_PORT}/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:${NGINX_LISTEN_PORT}${health_path} || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -562,12 +585,19 @@ set -euo pipefail
 
 NUM_NODES=${num_nginx_nodes}
 BASE_PORT=${nginx_external_port}
+GATEWAY_MODE=${mode}
 MAX_ATTEMPTS=30
+
+if [ "\$GATEWAY_MODE" = "host" ]; then
+    HEALTH_PATH="/nginx-health"
+else
+    HEALTH_PATH="/"
+fi
 
 for i in \$(seq 1 "\$NUM_NODES"); do
     port=\$((BASE_PORT + i - 1))
     attempt=0
-    until curl -fsS "http://localhost:\${port}/" >/dev/null 2>&1 || [ "\$attempt" -ge "\$MAX_ATTEMPTS" ]; do
+    until curl -fsS "http://localhost:\${port}\${HEALTH_PATH}" >/dev/null 2>&1 || [ "\$attempt" -ge "\$MAX_ATTEMPTS" ]; do
         attempt=\$((attempt + 1))
         echo "Waiting for nginx-gateway-\${i} on port \${port}... (\${attempt}/\${MAX_ATTEMPTS})"
         sleep 2
@@ -590,11 +620,18 @@ set -euo pipefail
 
 NUM_NODES=${num_nginx_nodes}
 BASE_PORT=${nginx_external_port}
+GATEWAY_MODE=${mode}
 all_healthy=true
+
+if [ "\$GATEWAY_MODE" = "host" ]; then
+    HEALTH_PATH="/nginx-health"
+else
+    HEALTH_PATH="/"
+fi
 
 for i in \$(seq 1 "\$NUM_NODES"); do
     port=\$((BASE_PORT + i - 1))
-    if curl -fsS "http://localhost:\${port}/" >/dev/null 2>&1; then
+    if curl -fsS "http://localhost:\${port}\${HEALTH_PATH}" >/dev/null 2>&1; then
         echo "[OK] nginx-gateway-\${i} responding on port \${port}"
     else
         echo "[FAIL] nginx-gateway-\${i} not responding on port \${port}"
@@ -648,12 +685,22 @@ for idx in "\${!APP_IDS[@]}"; do
     if [ "\$GATEWAY_MODE" = "host" ]; then
         host="\${APP_HOSTS[idx]}"
         check_route "Client \${app}" "http://localhost:\${BASE_PORT}/" "200 301 302 404 502 503 504" "\$host"
+        if [[ "\$host" == www.* ]]; then
+            alias_host="\${host#www.}"
+        else
+            alias_host="www.\${host}"
+        fi
+        check_route "Client \${app} www-pair" "http://localhost:\${BASE_PORT}/" "200 301 302 404 502 503 504" "\$alias_host"
         check_route "API (\${app} host)" "http://localhost:\${BASE_PORT}/api/" "200 301 302 404 405 502 503 504" "\$host"
     else
         path="\${APP_PATHS[idx]}"
         check_route "Client \${app}" "http://localhost:\${BASE_PORT}\${path}" "200 301 302 404 502 503 504"
     fi
 done
+if [ "\$GATEWAY_MODE" = "host" ]; then
+    check_route "Unknown host must not steal a client" "http://localhost:\${BASE_PORT}/" "404" "this-host-should-not-match.invalid"
+    check_route "Gateway health" "http://localhost:\${BASE_PORT}/nginx-health" "200"
+fi
 if [ "\$GATEWAY_MODE" != "host" ]; then
     check_route "API" "http://localhost:\${BASE_PORT}/api/" "200 301 302 404 405 502 503 504"
     check_route "Media API" "http://localhost:\${BASE_PORT}/api/auxiliary/media/" "200 301 302 404 405 502 503 504"
@@ -680,7 +727,7 @@ generate_readme() {
 
 Generated Nginx reverse proxy / load balancer for the Arpeggio stack.
 
-**Host mode:** each Sinfonia client is served at \`/\` on its own domain(s). Shared \`/api/\` and \`/ws/\` are available on every domain. Gateway port: \`${nginx_external_port}\`.
+**Host mode:** each Sinfonia client is served at \`/\` on its own domain(s), including the automatic \`www.\` pair. Shared \`/api/\` and \`/ws/\` are available on every domain. Unmatched Host headers return 404. Gateway port: \`${nginx_external_port}\`.
 
 ## Entry points
 
