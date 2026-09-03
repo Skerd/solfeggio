@@ -38,10 +38,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Emscripten/OpenCV.js allocates a large static heap; avoid OOM during require() in small containers.
 ENV NODE_OPTIONS="--max-old-space-size=6144"
 
-# Armonia deps — cached unless package.json changes.
+# Armonia deps — cached unless package.json / lockfile change.
+# npm 10.9.2 (node:22.14.0) crashes in arborist on vitest 4 optional peers
+# ("Cannot read properties of null (reading 'edgesOut')") when installing from
+# package.json alone. Lockfile + --legacy-peer-deps; npm i not ci because the
+# lockfile still has zod ^4.3.6 while package.json pins 4.3.6.
 WORKDIR /armonia
-COPY armonia/package.json ./
-RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund
+COPY armonia/package.json armonia/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund --legacy-peer-deps
 
 # Zod v4: explicit ZodPipe return type on preprocess() fails tsc; infer from z.preprocess().
 COPY armonia ./

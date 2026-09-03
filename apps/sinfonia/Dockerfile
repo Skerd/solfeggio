@@ -14,9 +14,10 @@ FROM node:22-alpine AS build
 # Large Vite/Rollup graphs (15k+ modules) exceed Node's default ~2 GiB heap during chunk rendering.
 ENV NODE_OPTIONS="--max-old-space-size=6144"
 
+# Same npm 10.x / vitest 4 arborist crash as maestro. Lockfile + --legacy-peer-deps.
 WORKDIR /armonia
-COPY armonia/package.json ./
-RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund
+COPY armonia/package.json armonia/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund --legacy-peer-deps
 COPY armonia ./
 RUN npm run build
 
