@@ -360,16 +360,18 @@ EOF
 
     if [ "$emit_root_assets" = "true" ]; then
         cat <<EOF
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 256;
+    gzip_proxied any;
+    gzip_types text/plain text/css application/javascript application/json application/wasm image/svg+xml;
+
     location /assets/ {
         proxy_pass http://${frontend_upstream};
 
-        proxy_buffering off;
-
         expires ${STATIC_ASSETS_EXPIRES};
+        add_header Cache-Control "public, immutable";
         access_log off;
-
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 
     location / {
