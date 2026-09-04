@@ -366,14 +366,6 @@ EOF
     gzip_proxied any;
     gzip_types text/plain text/css application/javascript application/json application/wasm image/svg+xml;
 
-    location /assets/ {
-        proxy_pass http://${frontend_upstream};
-
-        expires ${STATIC_ASSETS_EXPIRES};
-        add_header Cache-Control "public, immutable";
-        access_log off;
-    }
-
     location / {
         proxy_pass http://${frontend_upstream};
     }
