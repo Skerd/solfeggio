@@ -161,7 +161,7 @@ The gateway exposes **one host port** (default `80`) in either **path** or **hos
 
 ### Path mode
 
-The first selected Sinfonia client is at `/`; every additional client is at `/<appId>App/` and is built with matching Vite `base`.
+The first selected Sinfonia client is at `/`; every additional client is at `/<appId>App/`. Each SPA is built at `/`.
 
 | Path | Upstream | Purpose |
 |------|----------|---------|
@@ -174,7 +174,7 @@ The first selected Sinfonia client is at `/`; every additional client is at `/<a
 
 ### Host mode
 
-Each client is a separate nginx `server_name` vhost at `/`, built with `VITE_BASE_PATH=/`. `/api/` and `/ws/` are available on every domain.
+Each client is a separate nginx `server_name` vhost at `/`. `/api/` and `/ws/` are available on every domain.
 
 | Domain | Path | Upstream |
 |--------|------|----------|
@@ -258,16 +258,14 @@ Dockerfiles under `apps/` expect the **`deploy/` folder** as build context (not 
 # Maestro
 docker build -f apps/maestro/Dockerfile -t arpeggio-maestro:latest deploy/
 
-# Root client (path /)
+# Core client
 docker build -f apps/sinfonia/Dockerfile \
   --build-arg VITE_SINFONIA_APP=core \
-  --build-arg VITE_BASE_PATH=/ \
   -t arpeggio-frontend-core:latest deploy/
 
-# Path-mounted client (path /publicApp/)
+# Public client (own hostname in host mode)
 docker build -f apps/sinfonia/Dockerfile \
   --build-arg VITE_SINFONIA_APP=public \
-  --build-arg VITE_BASE_PATH=/publicApp/ \
   -t arpeggio-frontend-public:latest deploy/
 ```
 

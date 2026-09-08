@@ -754,9 +754,9 @@ prompt_sinfonia_client_apps() {
     local i
     for i in "${!SINFONIA_APP_IDS[@]}"; do
         if [ "${SINFONIA_GATEWAY_MODE}" = "host" ]; then
-            print_status "- ${SINFONIA_APP_IDS[$i]} -> host ${SINFONIA_APP_HOSTS[$i]} (container ${SINFONIA_APP_CONTAINERS[$i]}, base ${SINFONIA_APP_BASE_PATHS[$i]})"
+            print_status "- ${SINFONIA_APP_IDS[$i]} -> host ${SINFONIA_APP_HOSTS[$i]} (container ${SINFONIA_APP_CONTAINERS[$i]})"
         else
-            print_status "- ${SINFONIA_APP_IDS[$i]} -> ${SINFONIA_APP_PATHS[$i]} (container ${SINFONIA_APP_CONTAINERS[$i]}, base ${SINFONIA_APP_BASE_PATHS[$i]})"
+            print_status "- ${SINFONIA_APP_IDS[$i]} -> ${SINFONIA_APP_PATHS[$i]} (container ${SINFONIA_APP_CONTAINERS[$i]})"
         fi
     done
     echo ""

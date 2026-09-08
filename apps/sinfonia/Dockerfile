@@ -2,12 +2,10 @@
 # Build from the deploy folder (must contain armonia/ and sinfonia/):
 #   docker build -f apps/sinfonia/Dockerfile \
 #     --build-arg VITE_SINFONIA_APP=<appId> \
-#     --build-arg VITE_BASE_PATH=/   # or /<appId>App/ for path-mounted clients
 #     -t arpeggio-frontend-<appId>:latest deploy/
 #
-# Gateway strips non-root URL prefixes, so the container always serves at `/`.
-# Vite app id / base path ARGs are declared after npm install so core/public/dyeus
-# share cached dependency layers.
+# Each client is a separate SPA at `/`. Vite app id ARG is declared after npm
+# install so core/public/dyeus share cached dependency layers.
 
 FROM node:22-alpine AS build
 
@@ -28,10 +26,6 @@ COPY sinfonia ./
 
 ARG VITE_SINFONIA_APP=core
 ENV VITE_SINFONIA_APP=$VITE_SINFONIA_APP
-
-# Must match the gateway URL path for this client (`/` or `/publicApp/`, etc.).
-ARG VITE_BASE_PATH=/
-ENV VITE_BASE_PATH=$VITE_BASE_PATH
 
 RUN npm run build
 

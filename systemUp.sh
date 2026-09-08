@@ -340,9 +340,8 @@ build_maestro_image() {
 build_sinfonia_app_image() {
     local app_id="$1"
     local image_tag="$2"
-    local base_path="$3"
 
-    print_status "Building Sinfonia app=${app_id} base=${base_path} -> ${image_tag}"
+    print_status "Building Sinfonia app=${app_id} -> ${image_tag}"
     print_status "Dockerfile: ${SINFONIA_DOCKERFILE}"
     print_status "Context: ${DEPLOY_DIR}"
 
@@ -350,7 +349,6 @@ build_sinfonia_app_image() {
         -f "$SINFONIA_DOCKERFILE"
         -t "$image_tag"
         --build-arg "VITE_SINFONIA_APP=${app_id}"
-        --build-arg "VITE_BASE_PATH=${base_path}"
     )
     if [ "$DOCKER_BUILD_NO_CACHE" = "true" ]; then
         build_args+=(--no-cache)
@@ -378,7 +376,7 @@ build_sinfonia_image() {
 
     if [ "${#SINFONIA_APP_IDS[@]}" -le 1 ]; then
         for i in "${!SINFONIA_APP_IDS[@]}"; do
-            build_sinfonia_app_image "${SINFONIA_APP_IDS[$i]}" "${SINFONIA_APP_IMAGES[$i]}" "${SINFONIA_APP_BASE_PATHS[$i]}"
+            build_sinfonia_app_image "${SINFONIA_APP_IDS[$i]}" "${SINFONIA_APP_IMAGES[$i]}"
         done
         return 0
     fi
@@ -392,7 +390,7 @@ build_sinfonia_image() {
         log_file="${logs_dir}/${app_id}.log"
         print_status "Starting ${app_id} -> ${SINFONIA_APP_IMAGES[$i]} (log: ${log_file})"
         (
-            build_sinfonia_app_image "$app_id" "${SINFONIA_APP_IMAGES[$i]}" "${SINFONIA_APP_BASE_PATHS[$i]}"
+            build_sinfonia_app_image "$app_id" "${SINFONIA_APP_IMAGES[$i]}"
         ) >"$log_file" 2>&1 &
         pids+=("$!")
         app_ids+=("$app_id")

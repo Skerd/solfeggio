@@ -203,7 +203,7 @@ print_configuration_summary() {
         else
             mount_label="path ${SINFONIA_APP_PATHS[$i]}"
         fi
-        print_status "- Client ${SINFONIA_APP_IDS[$i]}: ${mount_label} -> ${SINFONIA_APP_CONTAINERS[$i]}:${FRONTEND_UPSTREAM_PORT} (base ${SINFONIA_APP_BASE_PATHS[$i]})"
+        print_status "- Client ${SINFONIA_APP_IDS[$i]}: ${mount_label} -> ${SINFONIA_APP_CONTAINERS[$i]}:${FRONTEND_UPSTREAM_PORT}"
     done
     print_status "- Frontend replicas per client: ${GREEN}${num_frontend_backends}${NC}"
     print_status "- API upstream servers: ${GREEN}${num_api_backends}${NC} (${API_UPSTREAM_HOST}:${API_UPSTREAM_PORT})"
@@ -482,7 +482,7 @@ EOF
 
     location ${path} {
         # Trailing slash on proxy_pass strips the URL prefix so the SPA
-        # container (built with matching VITE_BASE_PATH) still serves at /.
+        # container (always served at /) still receives root-relative paths.
         proxy_pass http://${SINFONIA_APP_UPSTREAMS[$i]}/;
     }
 

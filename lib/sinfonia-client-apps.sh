@@ -12,8 +12,8 @@
 #   www.<host> is paired automatically (dyeus.al ↔ www.dyeus.al).
 #   Extra aliases: public@pronix.al|shop.pronix.al
 #
-# Path-mode non-root apps are built with VITE_BASE_PATH matching their URL path.
-# Host-mode apps are always built with VITE_BASE_PATH=/.
+# Path-mode non-root apps are still mounted at `/<id>App/`; each SPA is always
+# built and served at `/` (one hostname per client, or gateway prefix strip).
 # Each SPA container always listens on internal port 80.
 
 sinfonia_frontend_container() {
@@ -273,7 +273,7 @@ sinfonia_panel_client_host() {
 
 # Parses SINFONIA_CLIENT_APPS into:
 #   SINFONIA_GATEWAY_MODE (path|host)
-#   SINFONIA_APP_IDS / SINFONIA_APP_PATHS / SINFONIA_APP_BASE_PATHS / SINFONIA_APP_HOSTS
+#   SINFONIA_APP_IDS / SINFONIA_APP_PATHS / SINFONIA_APP_HOSTS
 #   SINFONIA_APP_CONTAINERS / SINFONIA_APP_IMAGES / SINFONIA_APP_UPSTREAMS
 parse_sinfonia_client_apps() {
     local raw="${1:-}"
@@ -286,7 +286,6 @@ parse_sinfonia_client_apps() {
     SINFONIA_GATEWAY_MODE="path"
     SINFONIA_APP_IDS=()
     SINFONIA_APP_PATHS=()
-    SINFONIA_APP_BASE_PATHS=()
     SINFONIA_APP_HOSTS=()
     SINFONIA_APP_CONTAINERS=()
     SINFONIA_APP_IMAGES=()
@@ -378,13 +377,11 @@ parse_sinfonia_client_apps() {
             path="/"
             SINFONIA_APP_IDS+=("$id")
             SINFONIA_APP_PATHS+=("$path")
-            SINFONIA_APP_BASE_PATHS+=("/")
             SINFONIA_APP_HOSTS+=("$hosts")
         else
             path="$(normalize_sinfonia_url_path "$mount_raw")"
             SINFONIA_APP_IDS+=("$id")
             SINFONIA_APP_PATHS+=("$path")
-            SINFONIA_APP_BASE_PATHS+=("$path")
             SINFONIA_APP_HOSTS+=("")
         fi
 
@@ -553,7 +550,6 @@ write_sinfonia_apps_manifest() {
             printf '    {
       "id": "%s",
       "path": "%s",
-      "basePath": "%s",
       "hosts": "%s",
       "container": "%s",
       "image": "%s",
@@ -561,7 +557,6 @@ write_sinfonia_apps_manifest() {
     }' \
                 "${SINFONIA_APP_IDS[$i]}" \
                 "${SINFONIA_APP_PATHS[$i]}" \
-                "${SINFONIA_APP_BASE_PATHS[$i]}" \
                 "$host_json" \
                 "${SINFONIA_APP_CONTAINERS[$i]}" \
                 "${SINFONIA_APP_IMAGES[$i]}" \
