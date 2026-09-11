@@ -10,17 +10,11 @@ FROM node:22.14.0-bookworm
 WORKDIR /
 
 # Native toolchain + headers for node-canvas (Cairo/Pango/PNG/fonts), ffmpeg for fluent-ffmpeg,
-# libopencv-dev + cmake for @u4/opencv4nodejs (node-gyp against system OpenCV; maestro disables auto-build),
 # and extra Node heap for opencv.js (Emscripten/WASM) during load (sharp ships its own binaries).
-ENV OPENCV4NODEJS_DISABLE_AUTOBUILD=1
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    cmake \
     python3 \
     pkg-config \
-    libopencv-dev \
-    libopencv-contrib-dev \
     libcairo2-dev \
     libpango1.0-dev \
     libjpeg62-turbo-dev \
@@ -52,17 +46,12 @@ COPY armonia ./
 RUN sed -i 's/function withNumericFormDataPreprocess<T extends z.ZodTypeAny>(inner: T): z.ZodPipe<z.ZodTransform<unknown, unknown>, T> {/function withNumericFormDataPreprocess<T extends z.ZodTypeAny>(inner: T) {/' src/modules/core/helpers/zodBuilder.ts
 RUN npm run build
 
-# Maestro deps + native addons — cached unless package.json changes (OpenCV compile lives here).
+# Maestro deps + native addons — cached unless package.json changes.
 WORKDIR /maestro
 COPY maestro/package.json ./
-COPY scripts/rebuild-opencv4nodejs.sh ./scripts/rebuild-opencv4nodejs.sh
 RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund --ignore-scripts
 
 RUN npm rebuild bcrypt canvas sharp --foreground-scripts
-
-RUN chmod +x scripts/rebuild-opencv4nodejs.sh \
-    && npm run rebuild:opencv4nodejs \
-    && test -n "$(find node_modules/@u4/opencv4nodejs/build -name opencv4nodejs.node -print -quit)"
 
 COPY maestro ./
 COPY scripts/ ./scripts/
