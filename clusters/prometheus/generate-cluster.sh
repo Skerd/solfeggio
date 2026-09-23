@@ -168,7 +168,7 @@ services:
     container_name: prometheus
     hostname: prometheus
     ports:
-      - "$prometheus_port:9090"
+      - "127.0.0.1:$prometheus_port:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
@@ -198,7 +198,7 @@ EOF
     container_name: grafana
     hostname: grafana
     ports:
-      - "$grafana_port:3000"
+      - "127.0.0.1:$grafana_port:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin

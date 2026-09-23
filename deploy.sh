@@ -1308,7 +1308,7 @@ configure_maestro_ai_assistant_disabled() {
 
 configure_maestro_ai_assistant_enabled() {
     local ollama_env_file="${OLLAMA_CLUSTER_DIR}/.env"
-    local ollama_host ollama_model base_url timeout_ms temperature
+    local ollama_host ollama_model ollama_model_light base_url timeout_ms temperature
 
     if [ -f "$ollama_env_file" ]; then
         # shellcheck disable=SC1090
@@ -1316,8 +1316,12 @@ configure_maestro_ai_assistant_enabled() {
     fi
 
     ollama_host="${OLLAMA_HOST:-$OLLAMA_CONTAINER}"
-    ollama_model="${OLLAMA_MODEL:-llama3.1:8b}"
-    timeout_ms="${AI_ASSISTANT_TIMEOUT_MS:-60000}"
+    ollama_model="${OLLAMA_MODEL:-qwen3.6:35b}"
+    # Blank is meaningful: assistantBrain falls back to the main model.
+    ollama_model_light="${OLLAMA_MODEL_LIGHT-}"
+    # CPU-only hosts spend minutes on prefill before the first token; the old
+    # 60s default expired mid-request.
+    timeout_ms="${AI_ASSISTANT_TIMEOUT_MS:-300000}"
     temperature="${AI_ASSISTANT_TEMPERATURE:-0.7}"
     # Maestro reaches Ollama over the internal Docker network on the internal port.
     base_url="http://${ollama_host}:${OLLAMA_INTERNAL_PORT}"
@@ -1326,12 +1330,16 @@ configure_maestro_ai_assistant_enabled() {
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_PROVIDER" "ollama"
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_BASE_URL" "$base_url"
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_MODEL" "$ollama_model"
+    set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_MODEL_LIGHT" "$ollama_model_light"
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_TIMEOUT_MS" "$timeout_ms"
     set_env_var "$MAESTRO_ENV_FILE" "AI_ASSISTANT_TEMPERATURE" "$temperature"
 
     print_status "AI assistant enabled in ${MAESTRO_ENV_FILE}"
     print_status "Ollama endpoint: ${base_url}"
     print_status "Ollama model: ${ollama_model}"
+    if [ -n "$ollama_model_light" ]; then
+        print_status "Ollama light model (public chat): ${ollama_model_light}"
+    fi
 }
 
 prompt_ai_assistant_activation() {

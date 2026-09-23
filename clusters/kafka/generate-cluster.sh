@@ -301,9 +301,9 @@ EOF
     container_name: kafka-${i}
     hostname: kafka-${i}
     ports:
-      - "$((kafka_port + i - 1)):9092"
-      - "$((kafka_port + i - 1 + 20000)):29092"
-      - "$((kafka_port + i - 1 + 30000)):39092"
+      - "127.0.0.1:$((kafka_port + i - 1)):9092"
+      - "127.0.0.1:$((kafka_port + i - 1 + 20000)):29092"
+      - "127.0.0.1:$((kafka_port + i - 1 + 30000)):39092"
     environment:
       CLUSTER_ID: ${cluster_id}
       KAFKA_NODE_ID: ${i}
@@ -351,7 +351,7 @@ EOF
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: $(for i in $(seq 1 $num_brokers); do echo -n "kafka-${i}:29092"; if [ $i -lt $num_brokers ]; then echo -n ","; fi; done)

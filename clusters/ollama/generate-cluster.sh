@@ -87,8 +87,35 @@ get_user_input() {
         fi
     done
 
-    read -p "Enter Ollama model tag [default: ${OLLAMA_MODEL:-llama3.1:8b}]: " ollama_model
-    ollama_model=${ollama_model:-${OLLAMA_MODEL:-llama3.1:8b}}
+    read -p "Enter Ollama model tag [default: ${OLLAMA_MODEL:-qwen3.6:35b}]: " ollama_model
+    ollama_model=${ollama_model:-${OLLAMA_MODEL:-qwen3.6:35b}}
+
+    # Light model: served to the public visitor chat via AI_ASSISTANT_MODEL_LIGHT.
+    # `none` means "reuse the main model" (assistantBrain falls back on its own).
+    read -p "Enter light model tag for public chat, or 'none' to reuse the main one [default: ${OLLAMA_MODEL_LIGHT:-gpt-oss:20b}]: " ollama_model_light
+    ollama_model_light=${ollama_model_light:-${OLLAMA_MODEL_LIGHT:-gpt-oss:20b}}
+    if [ "$ollama_model_light" = "none" ]; then
+        ollama_model_light=""
+    fi
+
+    # CPU-only hosts are memory-bandwidth bound: generation saturates well below
+    # the physical core count and then regresses as slow cores become stragglers
+    # at every layer barrier. 0 lets Ollama decide; set it from llama-bench.
+    while true; do
+        read -p "Enter generation thread count, 0 = auto [default: ${OLLAMA_NUM_THREAD:-0}]: " ollama_threads
+        ollama_threads=${ollama_threads:-${OLLAMA_NUM_THREAD:-0}}
+        if validate_number "$ollama_threads" 0 256; then
+            break
+        fi
+    done
+
+    while true; do
+        read -p "Enter context length in tokens [default: ${OLLAMA_CONTEXT_LENGTH:-16384}]: " ollama_ctx
+        ollama_ctx=${ollama_ctx:-${OLLAMA_CONTEXT_LENGTH:-16384}}
+        if validate_number "$ollama_ctx" 2048 262144; then
+            break
+        fi
+    done
 
     if [ -z "$OLLAMA_IMAGE" ]; then
         ollama_image="ollama/ollama:latest"
@@ -102,8 +129,11 @@ get_user_input() {
     print_status "Configuration Summary:"
     print_status "- Ollama container:  ${GREEN}${OLLAMA_HOST}${NC}"
     print_status "- Internal port:     ${GREEN}${OLLAMA_INTERNAL_PORT}${NC} (used by Maestro on the internal network)"
-    print_status "- External port:     ${GREEN}${ollama_port}${NC} (host access/debugging)"
+    print_status "- External port:     ${GREEN}${ollama_port}${NC} (bound to 127.0.0.1 only)"
     print_status "- Model:             ${GREEN}${ollama_model}${NC}"
+    print_status "- Light model:       ${GREEN}${ollama_model_light:-<reuses main model>}${NC} (public visitor chat)"
+    print_status "- Gen threads:       ${GREEN}${ollama_threads}${NC} ($([ "$ollama_threads" = "0" ] && echo "auto" || echo "pinned"))"
+    print_status "- Context length:    ${GREEN}${ollama_ctx}${NC} tokens"
     print_status "- Image:             ${GREEN}${ollama_image}${NC}"
     print_status "- Docker network:    ${GREEN}${DOCKER_INTERNAL_NETWORK}${NC}"
     echo -e "${BLUE}================================================================${NC}"
@@ -119,6 +149,9 @@ get_user_input() {
     # Persist choices so deploy.sh can source authoritative values.
     set_env_var "OLLAMA_EXTERNAL_PORT" "$ollama_port"
     set_env_var "OLLAMA_MODEL" "$ollama_model"
+    set_env_var "OLLAMA_MODEL_LIGHT" "$ollama_model_light"
+    set_env_var "OLLAMA_NUM_THREAD" "$ollama_threads"
+    set_env_var "OLLAMA_CONTEXT_LENGTH" "$ollama_ctx"
     set_env_var "OLLAMA_IMAGE" "$ollama_image"
 }
 
@@ -127,6 +160,15 @@ generate_docker_compose() {
     local ollama_port=$1
     local ollama_model=$2
     local ollama_image=$3
+    local ollama_model_light=$4
+    local ollama_threads=$5
+    local ollama_ctx=$6
+
+    # Two models stay resident only if the server is allowed to hold two.
+    local max_loaded=1
+    if [ -n "$ollama_model_light" ] && [ "$ollama_model_light" != "$ollama_model" ]; then
+        max_loaded=2
+    fi
 
     print_status "Generating docker-compose.yml..."
 
@@ -141,12 +183,29 @@ services:
     hostname: ${OLLAMA_HOST}
     restart: unless-stopped
     ports:
-      - "${ollama_port}:${OLLAMA_INTERNAL_PORT}"
+      # Loopback only: Maestro reaches Ollama over the internal Docker network
+      # at http://${OLLAMA_HOST}:${OLLAMA_INTERNAL_PORT}. Publishing this on
+      # 0.0.0.0 would expose an unauthenticated inference endpoint to the
+      # internet on a public-IP host.
+      - "127.0.0.1:${ollama_port}:${OLLAMA_INTERNAL_PORT}"
     volumes:
       - ollama-data:/root/.ollama
     environment:
       OLLAMA_HOST: 0.0.0.0:${OLLAMA_INTERNAL_PORT}
+      # Keep weights resident: a cold reload re-reads tens of GB from disk.
       OLLAMA_KEEP_ALIVE: 24h
+      # Hold the main + light model at once so the public chat never evicts
+      # the internal assistant (and vice versa).
+      OLLAMA_MAX_LOADED_MODELS: ${max_loaded}
+      # CPU inference is bandwidth-bound; concurrent slots divide throughput
+      # and split the prefix KV cache the tool schema depends on.
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_CONTEXT_LENGTH: ${ollama_ctx}
+      OLLAMA_NUM_THREAD: ${ollama_threads}
+      # Halves KV-cache memory at no measurable quality cost. Flash attention
+      # is a prerequisite for the quantized cache.
+      OLLAMA_FLASH_ATTENTION: 1
+      OLLAMA_KV_CACHE_TYPE: q8_0
     networks:
       - arpeggio-internal
     healthcheck:
@@ -168,7 +227,15 @@ services:
 
 EOF
 
-    print_status " 2. Adding ${GREEN}model puller${NC} (one-shot) for ${ollama_model}"
+    local pull_light=""
+    if [ "$max_loaded" -eq 2 ]; then
+        print_status " 2. Adding ${GREEN}model puller${NC} (one-shot) for ${ollama_model} + ${ollama_model_light}"
+        pull_light="ollama pull ${ollama_model_light} &&
+        echo 'Model ${ollama_model_light} is ready.' &&"
+    else
+        print_status " 2. Adding ${GREEN}model puller${NC} (one-shot) for ${ollama_model}"
+    fi
+
     cat >> docker-compose.yml << EOF
   ${OLLAMA_HOST}-pull:
     image: ${ollama_image}
@@ -181,7 +248,8 @@ EOF
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >
-        echo 'Pulling model ${ollama_model} into the Ollama server...' &&
+        echo 'Pulling models into the Ollama server...' &&
+        ${pull_light}
         ollama pull ${ollama_model} &&
         echo 'Model ${ollama_model} is ready.'
     networks:
@@ -213,6 +281,7 @@ EOF
 generate_setup_scripts() {
     local ollama_port=$1
     local ollama_model=$2
+    local ollama_model_light=$3
 
     print_status "Generating setup scripts..."
 
@@ -299,6 +368,7 @@ print_error() {
 
 PORT=${ollama_port}
 MODEL="${ollama_model}"
+MODEL_LIGHT="${ollama_model_light}"
 healthy=true
 
 print_status "Checking Ollama container health..."
@@ -322,14 +392,18 @@ else
     healthy=false
 fi
 
-if [ -n "\$MODEL" ]; then
-    if curl -fsS "http://localhost:\${PORT}/api/tags" 2>/dev/null | grep -q "\$MODEL"; then
-        print_status "✓ Model \${MODEL} is available"
+for m in "\$MODEL" "\$MODEL_LIGHT"; do
+    [ -n "\$m" ] || continue
+    if curl -fsS "http://localhost:\${PORT}/api/tags" 2>/dev/null | grep -q "\$m"; then
+        print_status "✓ Model \${m} is available"
     else
-        print_warning "Model \${MODEL} is not available yet (it may still be pulling)"
+        print_warning "Model \${m} is not available yet (it may still be pulling)"
         healthy=false
     fi
-fi
+done
+
+print_status "Checking resident models (a cold model reloads tens of GB from disk)..."
+curl -fsS "http://localhost:\${PORT}/api/ps" 2>/dev/null | grep -o '"name":"[^"]*"' || print_warning "No model is currently resident"
 
 echo ""
 print_status "=== Health Check Summary ==="
@@ -364,8 +438,9 @@ main() {
 
     get_user_input
 
-    generate_docker_compose "$ollama_port" "$ollama_model" "$ollama_image"
-    generate_setup_scripts "$ollama_port" "$ollama_model"
+    generate_docker_compose "$ollama_port" "$ollama_model" "$ollama_image" \
+        "$ollama_model_light" "$ollama_threads" "$ollama_ctx"
+    generate_setup_scripts "$ollama_port" "$ollama_model" "$ollama_model_light"
 
     echo -e "${GREEN}================================================================${NC}"
     echo -e "${GREEN}               Generation completed successfully!${NC}"
