@@ -104,7 +104,7 @@ read_env_value() {
     local file="$1"
     local key="$2"
 
-    grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-
+    strip_env_quotes "$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-)"
 }
 
 docker_compose() {

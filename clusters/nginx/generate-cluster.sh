@@ -37,7 +37,7 @@ read_env_value_from_file() {
     local file="$1"
     local key="$2"
 
-    grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-
+    strip_env_quotes "$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-)"
 }
 
 load_maestro_upstream_ports() {

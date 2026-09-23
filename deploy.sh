@@ -69,7 +69,7 @@ read_env_value() {
     local value
 
     value="$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-)"
-    echo "$value"
+    strip_env_quotes "$value"
 }
 
 validate_deploy_number() {
@@ -900,7 +900,8 @@ configure_nginx_cluster_env() {
     set_env_var "$nginx_env_file" "API_UPSTREAM_PORT" "$api_port"
     set_env_var "$nginx_env_file" "WEBSOCKET_UPSTREAM_HOST" "$MAESTRO_WEBSOCKET_CONTAINER"
     set_env_var "$nginx_env_file" "WEBSOCKET_UPSTREAM_PORT" "$websocket_port"
-    set_env_var "$nginx_env_file" "SINFONIA_CLIENT_APPS" "$SINFONIA_CLIENT_APPS"
+    # Quoted: generate-cluster.sh sources this file and host specs contain "|".
+    set_env_var "$nginx_env_file" "SINFONIA_CLIENT_APPS" "$(quote_env_value "$SINFONIA_CLIENT_APPS")"
     set_env_var "$nginx_env_file" "SINFONIA_FRONTEND_REPLICAS" "${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
     set_env_var "$nginx_env_file" "NGINX_EXTERNAL_PORT" "$NGINX_EXTERNAL_PORT"
     set_env_var "$nginx_env_file" "NGINX_LISTEN_PORT" "80"

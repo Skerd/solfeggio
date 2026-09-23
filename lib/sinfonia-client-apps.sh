@@ -16,6 +16,33 @@
 # built and served at `/` (one hostname per client, or gateway prefix strip).
 # Each SPA container always listens on internal port 80.
 
+# Single-quote a value for an env file that may be sourced (host specs carry "|").
+quote_env_value() {
+    local value="${1-}"
+    local sq="'"
+    local esc="'\\''"
+    value="${value//$sq/$esc}"
+    printf '%s%s%s\n' "$sq" "$value" "$sq"
+}
+
+# Drop one layer of surrounding single/double quotes from an env-file value.
+strip_env_quotes() {
+    local value="${1-}"
+    local sq="'"
+    local dq='"'
+    local first last
+
+    if [ "${#value}" -ge 2 ]; then
+        first="${value:0:1}"
+        last="${value: -1}"
+        if { [ "$first" = "$sq" ] && [ "$last" = "$sq" ]; } ||
+           { [ "$first" = "$dq" ] && [ "$last" = "$dq" ]; }; then
+            value="${value:1:${#value}-2}"
+        fi
+    fi
+    printf '%s\n' "$value"
+}
+
 sinfonia_frontend_container() {
     echo "frontend-$1"
 }
@@ -526,9 +553,11 @@ write_sinfonia_apps_manifest() {
     mkdir -p "$dest_dir"
     spec="$(build_sinfonia_client_apps_spec)"
 
+    # Values are single-quoted: host-mode specs contain "|", which any consumer
+    # that sources this file would otherwise read as a pipeline.
     {
-        echo "SINFONIA_CLIENT_APPS=${spec}"
-        echo "SINFONIA_GATEWAY_MODE=${SINFONIA_GATEWAY_MODE:-path}"
+        echo "SINFONIA_CLIENT_APPS=$(quote_env_value "$spec")"
+        echo "SINFONIA_GATEWAY_MODE=$(quote_env_value "${SINFONIA_GATEWAY_MODE:-path}")"
         echo "SINFONIA_FRONTEND_REPLICAS=${replicas}"
         echo "NGINX_EXTERNAL_PORT=${gateway_port}"
     } > "$env_file"
@@ -572,22 +601,43 @@ write_sinfonia_apps_manifest() {
 
 load_sinfonia_apps_manifest() {
     local env_file=$1
-    local replicas
+    local replicas line key value
 
     if [ ! -f "$env_file" ]; then
         return 1
     fi
 
-    # shellcheck disable=SC1090
-    set -a
-    # shellcheck disable=SC1091
-    source "$env_file"
-    set +a
+    SINFONIA_CLIENT_APPS=""
 
-    parse_sinfonia_client_apps "${SINFONIA_CLIENT_APPS:-}" || return 1
+    # Read as data, never `source`: a host-mode spec (dyeus@dyeus.al|www.dyeus.al)
+    # sourced by the shell becomes a pipeline whose assignment lands in a subshell,
+    # leaving SINFONIA_CLIENT_APPS empty and silently falling back to core@/.
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*) continue ;;
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        value="$(strip_env_quotes "${line#*=}")"
+        case "$key" in
+            SINFONIA_CLIENT_APPS) SINFONIA_CLIENT_APPS="$value" ;;
+            SINFONIA_GATEWAY_MODE) SINFONIA_GATEWAY_MODE="$value" ;;
+            SINFONIA_FRONTEND_REPLICAS) SINFONIA_FRONTEND_REPLICAS="$value" ;;
+            NGINX_EXTERNAL_PORT) NGINX_EXTERNAL_PORT="$value" ;;
+        esac
+    done < "$env_file"
+
+    if [ -z "$SINFONIA_CLIENT_APPS" ]; then
+        echo "No SINFONIA_CLIENT_APPS in ${env_file}" >&2
+        return 1
+    fi
+
+    parse_sinfonia_client_apps "$SINFONIA_CLIENT_APPS" || return 1
     replicas="${SINFONIA_FRONTEND_REPLICAS:-1}"
     SINFONIA_FRONTEND_REPLICAS="$replicas"
     NGINX_EXTERNAL_PORT="${NGINX_EXTERNAL_PORT:-80}"
+    export SINFONIA_CLIENT_APPS SINFONIA_GATEWAY_MODE SINFONIA_FRONTEND_REPLICAS NGINX_EXTERNAL_PORT
     return 0
 }
 
