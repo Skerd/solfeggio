@@ -101,6 +101,7 @@ confirm_cleanup() {
     echo "  - cluster .env and .env.test files"
     echo "  - cluster generate-cluster.sh scripts"
     echo "  - apps/maestro/.env (not reverted)"
+    echo "  - apps/maestro/instances/ (Maestro env of every instance)"
     echo ""
 
     while true; do
@@ -128,7 +129,7 @@ print_cleanup_summary() {
     echo ""
     print_status "Deploy output removed"
     print_status "Generated cluster artifacts removed"
-    print_status "Run ./deploy.sh to prepare a fresh deployment"
+    print_status "Run ./deploy.sh once per instance to prepare a fresh deployment"
     echo -e "${GREEN}================================================================${NC}"
     echo ""
 }

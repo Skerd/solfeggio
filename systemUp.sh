@@ -23,18 +23,12 @@ print_error() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/sinfonia-client-apps.sh
 source "${SCRIPT_DIR}/lib/sinfonia-client-apps.sh"
-DEPLOY_DIR="${SCRIPT_DIR}/deploy"
-ARMONIA_DIR="${DEPLOY_DIR}/armonia"
-MAESTRO_DIR="${DEPLOY_DIR}/maestro"
-SINFONIA_DIR="${DEPLOY_DIR}/sinfonia"
-SINFONIA_APPS_ENV_FILE="${DEPLOY_DIR}/scripts/sinfonia-apps.env"
+# shellcheck source=lib/instances.sh
+source "${SCRIPT_DIR}/lib/instances.sh"
 MAESTRO_DOCKERFILE="${SCRIPT_DIR}/apps/maestro/Dockerfile"
 SINFONIA_DOCKERFILE="${SCRIPT_DIR}/apps/sinfonia/Dockerfile"
-MAESTRO_IMAGE="${ARPEGGIO_MAESTRO_IMAGE:-arpeggio-maestro:latest}"
-SERVERS_COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.servers.yml"
-FRONTEND_COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.frontend.yml"
-SERVERS_COMPOSE_PROJECT="servers"
-FRONTEND_COMPOSE_PROJECT="frontend"
+# Compose projects of the stack as it was deployed before instances existed.
+LEGACY_COMPOSE_PROJECTS=(servers frontend)
 COMPOSE_NETWORK_KEY="arpeggio-internal"
 CLUSTER_ENV_CANDIDATES=(nginx mongo kafka redis clamv ollama prometheus)
 KAFKA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/kafka"
@@ -53,20 +47,15 @@ INFRA_CLUSTER_START_ORDER=(
     "Prometheus|${PROMETHEUS_CLUSTER_DIR}"
 )
 
-MAESTRO_API_CONTAINER="maestroApi"
-MAESTRO_KAFKA_CONTAINER="maestroKafka"
-MAESTRO_WEBSOCKET_CONTAINER="maestroWebsocket"
-MAESTRO_CRON_CONTAINER="maestroCron"
-MAESTRO_ASSISTANT_CONTAINER="maestroAssistant"
-MAESTRO_TELEGRAM_CONTAINER="maestroTelegram"
-
 STARTED_CLUSTERS=()
 DOCKER_BUILD_NO_CACHE=false
 SKIP_MAESTRO_BUILD=false
 SKIP_FRONTEND_BUILD=false
+INSTANCE_ARG=""
 
 print_usage() {
-    echo "Usage: $0 [--no-cache] [--skip-maestro] [--skip-frontend]"
+    echo "Usage: $0 [instance] [--no-cache] [--skip-maestro] [--skip-frontend]"
+    echo "  instance         Instance to build and start (default: the one deploy.sh prepared last)"
     echo "  --no-cache       Build Maestro and selected Sinfonia client images without Docker layer cache"
     echo "  --skip-maestro   Reuse the existing Maestro image (SPA-only changes)"
     echo "  --skip-frontend  Reuse existing Sinfonia images (API-only changes)"
@@ -87,10 +76,18 @@ for arg in "$@"; do
             print_usage
             exit 0
             ;;
-        *)
+        -*)
             print_error "Unknown argument: $arg"
             print_usage
             exit 1
+            ;;
+        *)
+            if [ -n "$INSTANCE_ARG" ]; then
+                print_error "Only one instance can be started per run (got ${INSTANCE_ARG} and ${arg})."
+                print_usage
+                exit 1
+            fi
+            INSTANCE_ARG="$arg"
             ;;
     esac
 done
@@ -99,6 +96,35 @@ if [ "$SKIP_MAESTRO_BUILD" = "true" ] && [ "$SKIP_FRONTEND_BUILD" = "true" ]; th
     print_error "Cannot combine --skip-maestro and --skip-frontend."
     exit 1
 fi
+
+select_instance() {
+    local name="$INSTANCE_ARG"
+
+    if [ -z "$name" ] && [ -f "$ARPEGGIO_CURRENT_INSTANCE_FILE" ]; then
+        name="$(head -1 "$ARPEGGIO_CURRENT_INSTANCE_FILE")"
+    fi
+
+    if [ -z "$name" ] || [ ! -f "$(instance_maestro_env_file "$name")" ]; then
+        print_error "Unknown instance: ${name:-none selected}"
+        print_error "Known instances: $(list_instances | paste -sd' ' -)"
+        print_error "Run ./deploy.sh first to prepare an instance."
+        exit 1
+    fi
+
+    set_instance_paths "$name"
+    INSTANCE_MAESTRO_ENV_FILE="$(instance_maestro_env_file "$name")"
+    MAESTRO_IMAGE="${ARPEGGIO_MAESTRO_IMAGE:-arpeggio-maestro-${name}:latest}"
+    SERVERS_COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.servers.yml"
+    FRONTEND_COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.frontend.yml"
+    SERVERS_COMPOSE_PROJECT="servers-${name}"
+    FRONTEND_COMPOSE_PROJECT="frontend-${name}"
+    MAESTRO_API_CONTAINER="$(maestro_container Api)"
+    MAESTRO_KAFKA_CONTAINER="$(maestro_container Kafka)"
+    MAESTRO_WEBSOCKET_CONTAINER="$(maestro_container Websocket)"
+    MAESTRO_CRON_CONTAINER="$(maestro_container Cron)"
+    MAESTRO_ASSISTANT_CONTAINER="$(maestro_container Assistant)"
+    MAESTRO_TELEGRAM_CONTAINER="$(maestro_container Telegram)"
+}
 
 read_env_value() {
     local file="$1"
@@ -499,9 +525,152 @@ start_gateway_cluster() {
     fi
 }
 
+# Edits to the instance's Maestro env take effect on the next systemUp.sh
+# without re-running deploy.sh.
+sync_instance_maestro_env() {
+    if [ ! -d "$MAESTRO_DIR" ]; then
+        return 0
+    fi
+
+    cp "$INSTANCE_MAESTRO_ENV_FILE" "${MAESTRO_DIR}/.env"
+    print_status "Synced Maestro env of instance ${ARPEGGIO_INSTANCE} to ${MAESTRO_DIR}/.env"
+}
+
+# The stack deployed before instances existed uses un-instanced container
+# names, and would run its crons and consumers next to the instance that
+# replaces it.
+remove_legacy_stack() {
+    local project names confirm_input
+    local legacy_names=""
+
+    for project in "${LEGACY_COMPOSE_PROJECTS[@]}"; do
+        names="$(docker ps -a --filter "label=com.docker.compose.project=${project}" --format '{{.Names}}')"
+        if [ -n "$names" ]; then
+            legacy_names+="${names}"$'\n'
+        fi
+    done
+
+    if [ -z "$legacy_names" ]; then
+        return 0
+    fi
+
+    echo ""
+    print_warning "Found containers of the stack deployed before instances existed:"
+    echo "$legacy_names" | sed '/^$/d; s/^/  - /'
+    print_warning "They are replaced by the containers of instance ${ARPEGGIO_INSTANCE} and must be removed first."
+    print_warning "Only the containers are removed; MongoDB, Redis and Kafka data is untouched."
+
+    read -r -p "Remove these containers now? (y/N): " confirm_input
+    case "${confirm_input:-N}" in
+        [Yy]|[Yy][Ee][Ss]) ;;
+        *)
+            print_error "Cannot start instance ${ARPEGGIO_INSTANCE} next to the previous stack."
+            exit 1
+            ;;
+    esac
+
+    # shellcheck disable=SC2086
+    docker rm -f $legacy_names >/dev/null
+    print_status "Removed the previous stack's containers"
+}
+
+# Creates the instance's database and user on the shared MongoDB cluster.
+# The cluster's entrypoint only creates the database it was generated with.
+ensure_instance_mongo_database() {
+    local env_file="${MAESTRO_DIR}/.env"
+    local router database username password uri attempt=0 max_attempts=60
+
+    router="$(read_env_value "$env_file" "MONGODB_HOST")"
+    database="$(read_env_value "$env_file" "MONGODB_DB_NAME")"
+    username="$(read_env_value "$env_file" "MONGODB_USER")"
+    password="$(read_env_value "$env_file" "MONGODB_PASSWORD")"
+
+    echo ""
+    echo -e "${BLUE}================================================================${NC}"
+    echo -e "${BLUE}        Preparing MongoDB database: ${database}${NC}"
+    echo -e "${BLUE}================================================================${NC}"
+    echo ""
+
+    if [ -z "$router" ] || [ -z "$database" ] || [ -z "$username" ] || [ -z "$password" ]; then
+        print_error "MONGODB_HOST, MONGODB_DB_NAME, MONGODB_USER and MONGODB_PASSWORD must be set in ${env_file}"
+        exit 1
+    fi
+
+    if ! docker inspect "$router" >/dev/null 2>&1; then
+        print_error "MongoDB router container not found: ${router}"
+        exit 1
+    fi
+
+    uri="mongodb://localhost:27017/?tls=true&tlsCAFile=/certs/ca.crt.pem&tlsCertificateKeyFile=/certs/${router}.pem"
+
+    # A freshly started router answers before its entrypoint has added the shards.
+    until docker exec "$router" mongosh "$uri" --quiet \
+        --eval 'db.getSiblingDB("config").shards.countDocuments({}) > 0' 2>/dev/null | grep -q 'true'; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            print_error "MongoDB router ${router} did not become ready"
+            exit 1
+        fi
+        print_status "Waiting for MongoDB router ${router}... (${attempt}/${max_attempts})"
+        sleep 5
+    done
+
+    docker exec \
+        -e INSTANCE_DB="$database" \
+        -e INSTANCE_USER="$username" \
+        -e INSTANCE_PASSWORD="$password" \
+        "$router" mongosh "$uri" --quiet --eval '
+            const database = db.getSiblingDB(process.env.INSTANCE_DB);
+            if (database.getUser(process.env.INSTANCE_USER)) {
+                print("User " + process.env.INSTANCE_USER + " already exists on " + process.env.INSTANCE_DB);
+            } else {
+                database.createUser({
+                    user: process.env.INSTANCE_USER,
+                    pwd: process.env.INSTANCE_PASSWORD,
+                    roles: [{ role: "readWrite", db: process.env.INSTANCE_DB }]
+                });
+                print("User " + process.env.INSTANCE_USER + " created on " + process.env.INSTANCE_DB);
+            }
+            try {
+                sh.enableSharding(process.env.INSTANCE_DB);
+            } catch (e) {
+                print("Sharding not enabled (may already be enabled): " + e);
+            }
+        '
+
+    print_status "MongoDB database ${database} is ready for instance ${ARPEGGIO_INSTANCE}"
+}
+
+# Nginx refuses to start when an upstream host does not resolve, so the gateway
+# only routes to this instance and to the other instances that are running.
+generate_gateway_for_running_instances() {
+    local name
+    local instances="$ARPEGGIO_INSTANCE"
+
+    if [ ! -f "${NGINX_CLUSTER_DIR}/docker-compose.yml" ]; then
+        return 0
+    fi
+
+    for name in $(list_instances); do
+        [ "$name" != "$ARPEGGIO_INSTANCE" ] || continue
+        if [ "$(docker inspect -f '{{.State.Running}}' "$(ARPEGGIO_INSTANCE="$name" maestro_container Api)" 2>/dev/null)" = "true" ]; then
+            instances+=",${name}"
+        fi
+    done
+
+    echo ""
+    print_status "Regenerating Nginx gateway for running instances: ${instances}"
+    (
+        cd "$NGINX_CLUSTER_DIR"
+        NGINX_DEPLOY_MODE=true NGINX_GATEWAY_INSTANCES="$instances" ./generate-cluster.sh
+    )
+}
+
 start_full_stack() {
     start_infrastructure_clusters
+    ensure_instance_mongo_database
     start_application_stack
+    generate_gateway_for_running_instances
     start_gateway_cluster
 }
 
@@ -688,7 +857,7 @@ print_system_up_summary() {
 
     echo ""
     echo -e "${GREEN}================================================================${NC}"
-    echo -e "${GREEN}                    System is up${NC}"
+    echo -e "${GREEN}            Instance ${ARPEGGIO_INSTANCE} is up${NC}"
     echo -e "${GREEN}================================================================${NC}"
     echo ""
     echo -e "${BLUE}Images${NC}"
@@ -752,6 +921,9 @@ main() {
 
     export DOCKER_BUILDKIT=1
 
+    select_instance
+    print_status "Instance: ${ARPEGGIO_INSTANCE}"
+    sync_instance_maestro_env
     validate_deploy_sources
     load_internal_network_name
     ensure_internal_network
@@ -774,6 +946,7 @@ main() {
     fi
 
     generate_application_compose_files
+    remove_legacy_stack
     start_full_stack
     restart_nginx_gateway
     print_system_up_summary

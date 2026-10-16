@@ -24,6 +24,7 @@
 /clusters/nginx/README.md
 /clusters/prometheus/.env
 /apps/maestro/.env
+/apps/maestro/instances/
 /clusters/kafka/certs/
 /clusters/kafka/scripts/
 /clusters/kafka/secrets/

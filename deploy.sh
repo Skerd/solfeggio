@@ -24,32 +24,22 @@ print_error() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/sinfonia-client-apps.sh
 source "${SCRIPT_DIR}/lib/sinfonia-client-apps.sh"
-DEPLOY_DIR="${SCRIPT_DIR}/deploy"
-ARMONIA_DIR="${DEPLOY_DIR}/armonia"
-ARMONIA_MODULES_DIR="${ARMONIA_DIR}/src/modules"
+# shellcheck source=lib/instances.sh
+source "${SCRIPT_DIR}/lib/instances.sh"
 ARMONIA_CORE_URL="https://github.com/Skerd/armonia_core.git"
-MAESTRO_DIR="${DEPLOY_DIR}/maestro"
-MAESTRO_MODULES_DIR="${MAESTRO_DIR}/modules"
 MAESTRO_CORE_URL="https://github.com/Skerd/maestro_core.git"
-SINFONIA_DIR="${DEPLOY_DIR}/sinfonia"
-SINFONIA_MODULES_DIR="${SINFONIA_DIR}/src/modules"
 SINFONIA_CORE_URL="https://github.com/Skerd/sinfonia_core.git"
-SINFONIA_APPS_ENV_FILE="${DEPLOY_DIR}/scripts/sinfonia-apps.env"
 KAFKA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/kafka"
 REDIS_CLUSTER_DIR="${SCRIPT_DIR}/clusters/redis"
 MONGO_CLUSTER_DIR="${SCRIPT_DIR}/clusters/mongo"
 CLAMAV_CLUSTER_DIR="${SCRIPT_DIR}/clusters/clamv"
 OLLAMA_CLUSTER_DIR="${SCRIPT_DIR}/clusters/ollama"
 NGINX_CLUSTER_DIR="${SCRIPT_DIR}/clusters/nginx"
-MAESTRO_ENV_FILE="${SCRIPT_DIR}/apps/maestro/.env"
+# Seed for a new instance's Maestro env; deploy.sh never edits it.
+MAESTRO_ENV_TEMPLATE="${SCRIPT_DIR}/apps/maestro/.env"
 MAESTRO_SECRETS_SRC="${SCRIPT_DIR}/apps/maestro/secrets"
-MAESTRO_SECRETS_DIR="${MAESTRO_DIR}/secrets"
-MAESTRO_KAFKA_CERTS_DIR="${MAESTRO_SECRETS_DIR}/certificates/kafka"
-MAESTRO_MONGO_CERTS_DIR="${MAESTRO_SECRETS_DIR}/certificates/mongo"
 DEFAULT_BRANCH="main"
 DEFAULT_INTERNAL_NETWORK="arpeggio_internal_network"
-MAESTRO_API_CONTAINER="maestroApi"
-MAESTRO_WEBSOCKET_CONTAINER="maestroWebsocket"
 PROMETHEUS_CONTAINER="prometheus"
 MONGODB_CONTAINER="router-01"
 MONGODB_INTERNAL_PORT="27017"
@@ -140,29 +130,100 @@ cluster_is_generated() {
     [ -f "${cluster_dir}/docker-compose.yml" ]
 }
 
-parse_nginx_external_port() {
-    local compose_file="${NGINX_CLUSTER_DIR}/docker-compose.yml"
-    local port
-    local env_port
+# Paths and container names of the instance being deployed.
+set_instance_context() {
+    set_instance_paths "$1"
+    ARMONIA_MODULES_DIR="${ARMONIA_DIR}/src/modules"
+    MAESTRO_MODULES_DIR="${MAESTRO_DIR}/modules"
+    SINFONIA_MODULES_DIR="${SINFONIA_DIR}/src/modules"
+    MAESTRO_ENV_FILE="$(instance_maestro_env_file "$ARPEGGIO_INSTANCE")"
+    MAESTRO_SECRETS_DIR="${MAESTRO_DIR}/secrets"
+    MAESTRO_KAFKA_CERTS_DIR="${MAESTRO_SECRETS_DIR}/certificates/kafka"
+    MAESTRO_MONGO_CERTS_DIR="${MAESTRO_SECRETS_DIR}/certificates/mongo"
+    MAESTRO_API_CONTAINER="$(maestro_container Api)"
+    MAESTRO_WEBSOCKET_CONTAINER="$(maestro_container Websocket)"
+}
 
-    env_port="$(read_env_value "${NGINX_CLUSTER_DIR}/.env" "NGINX_EXTERNAL_PORT")"
-    if [ -n "$env_port" ]; then
-        echo "$env_port"
+# "b,a" -> "a,b" so module lists compare regardless of the order they were typed in.
+normalize_module_set() {
+    echo "$1" | tr ',' '\n' | sed '/^$/d' | LC_ALL=C sort | paste -sd, -
+}
+
+prompt_instance() {
+    local selected_modules default_name name instance_modules instance_input confirm_input
+
+    selected_modules="$(normalize_module_set "$(IFS=,; echo "${CLEANED_MODULES[*]}")")"
+    default_name="$(echo "${CLEANED_MODULES[${#CLEANED_MODULES[@]}-1]}" | tr '[:upper:]' '[:lower:]')"
+
+    echo ""
+    echo -e "${BLUE}================================================================${NC}"
+    echo -e "Instance"
+    echo -e "${BLUE}================================================================${NC}"
+    echo ""
+    echo "An instance is one deployment with its own Maestro containers, Sinfonia clients,"
+    echo "MongoDB database, Redis database and Kafka topics. Instances share the"
+    echo "infrastructure clusters and the Nginx gateway."
+    echo ""
+
+    # Re-deploying a module set selects the instance that already runs it.
+    for name in $(list_instances); do
+        instance_modules="$(normalize_module_set "$(read_env_value "$(instance_maestro_env_file "$name")" "ENABLED_MODULES")")"
+        echo "  Existing instance: ${name} (modules: ${instance_modules:-none})"
+        if [ "$instance_modules" = "$selected_modules" ]; then
+            default_name="$name"
+        fi
+    done
+
+    while true; do
+        read -r -p "Instance name [default: ${default_name}]: " instance_input
+        instance_input="${instance_input:-$default_name}"
+        if ! is_valid_instance_name "$instance_input"; then
+            print_error "Use lowercase letters, numbers and hyphens (e.g. ecommerce)"
+            continue
+        fi
+
+        if [ -f "$(instance_maestro_env_file "$instance_input")" ]; then
+            instance_modules="$(normalize_module_set "$(read_env_value "$(instance_maestro_env_file "$instance_input")" "ENABLED_MODULES")")"
+            if [ "$instance_modules" != "$selected_modules" ]; then
+                print_warning "Instance ${instance_input} currently deploys: ${instance_modules:-none}"
+                print_warning "This run changes its modules to: ${selected_modules}"
+                read -r -p "Change the modules of instance ${instance_input}? (y/N): " confirm_input
+                case "${confirm_input:-N}" in
+                    [Yy]|[Yy][Ee][Ss]) ;;
+                    *) continue ;;
+                esac
+            fi
+        fi
+        break
+    done
+
+    set_instance_context "$instance_input"
+    print_status "Instance: ${ARPEGGIO_INSTANCE}"
+}
+
+ensure_instance_maestro_env() {
+    if [ -f "$MAESTRO_ENV_FILE" ]; then
+        print_status "Using Maestro env of instance ${ARPEGGIO_INSTANCE}: ${MAESTRO_ENV_FILE}"
         return 0
     fi
 
-    if [ -n "${NGINX_EXTERNAL_PORT:-}" ]; then
-        echo "$NGINX_EXTERNAL_PORT"
-        return 0
+    if [ ! -f "$MAESTRO_ENV_TEMPLATE" ]; then
+        print_error "Maestro env template not found: ${MAESTRO_ENV_TEMPLATE}"
+        exit 1
     fi
 
-    if [ ! -f "$compose_file" ]; then
-        echo "80"
-        return 0
-    fi
+    mkdir -p "$(dirname "$MAESTRO_ENV_FILE")"
+    cp "$MAESTRO_ENV_TEMPLATE" "$MAESTRO_ENV_FILE"
+    chmod 600 "$MAESTRO_ENV_FILE"
+    # Assigned per instance during this run; the template's values belong to
+    # another deployment.
+    set_env_var "$MAESTRO_ENV_FILE" "MONGODB_DB_NAME" ""
+    set_env_var "$MAESTRO_ENV_FILE" "REDIS_DATABASE" ""
 
-    port="$(grep -m1 -E '^\s+-\s+"[0-9]+:[0-9]+"' "$compose_file" | sed -E 's/.*"([0-9]+):[0-9]+".*/\1/')"
-    echo "${port:-80}"
+    print_status "Created Maestro env for new instance ${ARPEGGIO_INSTANCE}: ${MAESTRO_ENV_FILE}"
+    print_warning "It is a copy of ${MAESTRO_ENV_TEMPLATE}. Before ./systemUp.sh, review the values"
+    print_warning "that must differ per instance: CLIENT_NAME, EMAIL_*, TELEGRAM_TOKEN, STRIPE_*,"
+    print_warning "GOOGLE_*/APPLE_* redirect URLs and the JWT/SESSION/COOKIE secrets."
 }
 
 configure_cluster_network_env_files() {
@@ -252,6 +313,23 @@ configure_maestro_kafka_disabled() {
     print_status "Kafka disabled in ${MAESTRO_ENV_FILE}"
 }
 
+# Instances share the Kafka brokers. Prefixing every topic and consumer group
+# keeps one instance from consuming another's cron, email and metrics messages.
+prefix_maestro_kafka_names() {
+    local prefix="${ARPEGGIO_INSTANCE}-"
+    local entries key value
+
+    entries="$(grep -E '^KAFKA_(TOPIC|CONSUMER_GROUP)_[A-Z_]+=' "$MAESTRO_ENV_FILE" || true)"
+    while IFS='=' read -r key value; do
+        case "$value" in
+            ""|"${prefix}"*) continue ;;
+        esac
+        set_env_var "$MAESTRO_ENV_FILE" "$key" "${prefix}${value}"
+    done <<< "$entries"
+
+    print_status "Kafka topics and consumer groups prefixed with: ${prefix}"
+}
+
 configure_maestro_kafka_enabled() {
     local kafka_env_file="${KAFKA_CLUSTER_DIR}/.env"
     local compose_file="${KAFKA_CLUSTER_DIR}/docker-compose.yml"
@@ -285,6 +363,7 @@ configure_maestro_kafka_enabled() {
     set_env_var "$MAESTRO_ENV_FILE" "KAFKA_PASSWORD" "$kafka_password"
     set_env_var "$MAESTRO_ENV_FILE" "KAFKA_SSL_CA_PATH" "secrets/certificates/kafka/ca.crt.pem"
     set_env_var "$MAESTRO_ENV_FILE" "KAFKA_SSL_REJECT_UNAUTHORIZED" "true"
+    prefix_maestro_kafka_names
 
     print_status "Kafka enabled in ${MAESTRO_ENV_FILE}"
     print_status "Kafka brokers: ${brokers}"
@@ -404,10 +483,39 @@ configure_maestro_redis_disabled() {
     print_status "Redis connection settings cleared in ${MAESTRO_ENV_FILE}"
 }
 
+# Instances share the Redis cluster and Maestro's keys are fixed strings, so
+# each instance gets its own logical database. Assigned once, then kept.
+resolve_instance_redis_database() {
+    local current name database
+    local used=" "
+
+    current="$(read_env_value "$MAESTRO_ENV_FILE" "REDIS_DATABASE")"
+    if [ -n "$current" ]; then
+        echo "$current"
+        return 0
+    fi
+
+    for name in $(list_instances); do
+        [ "$name" != "$ARPEGGIO_INSTANCE" ] || continue
+        used+="$(read_env_value "$(instance_maestro_env_file "$name")" "REDIS_DATABASE") "
+    done
+
+    # Redis ships with 16 logical databases (0-15).
+    for database in $(seq 0 15); do
+        if [[ "$used" != *" ${database} "* ]]; then
+            echo "$database"
+            return 0
+        fi
+    done
+
+    print_error "No free Redis database left (0-15 are all assigned to instances)" >&2
+    return 1
+}
+
 configure_maestro_redis_enabled() {
     local redis_env_file="${REDIS_CLUSTER_DIR}/.env"
     local compose_file="${REDIS_CLUSTER_DIR}/docker-compose.yml"
-    local root_nodes
+    local root_nodes redis_database
 
     if [ ! -f "$redis_env_file" ]; then
         print_error "Redis cluster .env not found: ${redis_env_file}"
@@ -418,15 +526,17 @@ configure_maestro_redis_enabled() {
     source "$redis_env_file"
 
     root_nodes="$(parse_redis_root_nodes "$compose_file")"
+    redis_database="$(resolve_instance_redis_database)"
 
     set_env_var "$MAESTRO_ENV_FILE" "REDIS_ROOT_NODES" "$root_nodes"
     set_env_var "$MAESTRO_ENV_FILE" "REDIS_USERNAME" "${REDIS_USERNAME:-}"
     set_env_var "$MAESTRO_ENV_FILE" "REDIS_PASSWORD" "${REDIS_PASSWORD:-}"
-    set_env_var "$MAESTRO_ENV_FILE" "REDIS_DATABASE" "${REDIS_DATABASE:-0}"
+    set_env_var "$MAESTRO_ENV_FILE" "REDIS_DATABASE" "$redis_database"
     set_env_var "$MAESTRO_ENV_FILE" "REDIS_KEY_PREFIX" "${REDIS_KEY_PREFIX:-arpeggio}"
 
     print_status "Redis enabled in ${MAESTRO_ENV_FILE}"
     print_status "Redis root nodes: ${root_nodes}"
+    print_status "Redis database of instance ${ARPEGGIO_INSTANCE}: ${redis_database}"
 }
 
 prompt_redis_activation() {
@@ -541,6 +651,56 @@ show_mongo_enabled_features() {
     echo "  - TLS-secured connection to the MongoDB sharded cluster router"
 }
 
+# Database of this instance on the shared MongoDB cluster, returned in
+# INSTANCE_MONGO_DB. Asked once, then kept; systemUp.sh creates it.
+prompt_instance_mongo_database() {
+    local cluster_db="$1"
+    local current name other default_db db_input
+    local claimed=" "
+
+    current="$(read_env_value "$MAESTRO_ENV_FILE" "MONGODB_DB_NAME")"
+    if [ -n "$current" ]; then
+        INSTANCE_MONGO_DB="$current"
+        return 0
+    fi
+
+    echo ""
+    echo "Each instance keeps its data in its own database on the MongoDB cluster."
+    for name in $(list_instances); do
+        [ "$name" != "$ARPEGGIO_INSTANCE" ] || continue
+        other="$(read_env_value "$(instance_maestro_env_file "$name")" "MONGODB_DB_NAME")"
+        [ -n "$other" ] || continue
+        claimed+="${other} "
+        echo "  Instance ${name} uses: ${other}"
+    done
+
+    # The cluster's original database holds the data of the deployment the
+    # template describes; only an instance with those modules defaults to it.
+    default_db="${cluster_db}-${ARPEGGIO_INSTANCE}"
+    if [[ "$claimed" != *" ${cluster_db} "* ]] &&
+       [ "$(normalize_module_set "$(read_env_value "$MAESTRO_ENV_TEMPLATE" "ENABLED_MODULES")")" = "$(normalize_module_set "$(read_env_value "$MAESTRO_ENV_FILE" "ENABLED_MODULES")")" ]; then
+        default_db="$cluster_db"
+        echo "  ${cluster_db} is the cluster's existing database (kept as the default for these modules)."
+    fi
+    echo ""
+
+    while true; do
+        read -r -p "MongoDB database for instance ${ARPEGGIO_INSTANCE} [default: ${default_db}]: " db_input
+        db_input="${db_input:-$default_db}"
+        if [[ ! "$db_input" =~ ^[A-Za-z0-9_-]{1,63}$ ]]; then
+            print_error "Use letters, numbers, - or _ (max 63 characters)"
+            continue
+        fi
+        if [[ "$claimed" == *" ${db_input} "* ]]; then
+            print_error "Database ${db_input} already belongs to another instance"
+            continue
+        fi
+        break
+    done
+
+    INSTANCE_MONGO_DB="$db_input"
+}
+
 configure_maestro_mongo_enabled() {
     local mongo_env_file="${MONGO_CLUSTER_DIR}/.env"
     local compose_file="${MONGO_CLUSTER_DIR}/docker-compose.yml"
@@ -560,6 +720,7 @@ configure_maestro_mongo_enabled() {
     fi
 
     mongo_host="$(parse_mongo_router_host "$compose_file")"
+    prompt_instance_mongo_database "$COLLECTION_NAME"
 
     print_status "Copying MongoDB TLS certificates to ${MAESTRO_MONGO_CERTS_DIR}"
     copy_mongo_certificates "$MONGO_CLUSTER_DIR" "$MAESTRO_MONGO_CERTS_DIR"
@@ -567,17 +728,17 @@ configure_maestro_mongo_enabled() {
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_PRE_HOST" "mongodb://"
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_HOST" "$mongo_host"
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_PORT" "$MONGODB_INTERNAL_PORT"
-    set_env_var "$MAESTRO_ENV_FILE" "MONGODB_DB_NAME" "$COLLECTION_NAME"
+    set_env_var "$MAESTRO_ENV_FILE" "MONGODB_DB_NAME" "$INSTANCE_MONGO_DB"
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_USER" "$APP_USERNAME"
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_PASSWORD" "$APP_PASSWORD"
-    set_env_var "$MAESTRO_ENV_FILE" "MONGODB_PARAMS" "?tls=true&authSource=${COLLECTION_NAME}"
+    set_env_var "$MAESTRO_ENV_FILE" "MONGODB_PARAMS" "?tls=true&authSource=${INSTANCE_MONGO_DB}"
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_ROOT_CA_CERT_PATH" "secrets/certificates/mongo/ca.crt.pem"
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_TLS_CERTIFICATE_KEY_FILE_PATH" "secrets/certificates/mongo/router-01.pem"
-    set_env_var "$MAESTRO_ENV_FILE" "MONGODB_AUTH_SOURCE" "$COLLECTION_NAME"
+    set_env_var "$MAESTRO_ENV_FILE" "MONGODB_AUTH_SOURCE" "$INSTANCE_MONGO_DB"
 
     print_status "MongoDB enabled in ${MAESTRO_ENV_FILE}"
     print_status "MongoDB router: ${mongo_host}:${MONGODB_INTERNAL_PORT}"
-    print_status "MongoDB database: ${COLLECTION_NAME}"
+    print_status "MongoDB database of instance ${ARPEGGIO_INSTANCE}: ${INSTANCE_MONGO_DB}"
 }
 
 setup_mongo_cluster() {
@@ -878,33 +1039,22 @@ prompt_nginx_gateway_settings() {
     echo ""
 }
 
+# Gateway-wide settings only. Each instance's clients, port and Maestro
+# upstreams are read by generate-cluster.sh from the instance's own files.
 configure_nginx_cluster_env() {
     local nginx_env_file="${NGINX_CLUSTER_DIR}/.env"
-    local api_port websocket_port
-
-    api_port="$(read_env_value "$MAESTRO_ENV_FILE" "SERVER_PORT")"
-    websocket_port="$(read_env_value "$MAESTRO_ENV_FILE" "WEBSOCKET_PORT")"
-    api_port="${api_port:-81}"
-    websocket_port="${websocket_port:-82}"
 
     if [ ! -f "$nginx_env_file" ]; then
         print_error "Nginx env file not found: ${nginx_env_file}"
         exit 1
     fi
 
-    SINFONIA_CLIENT_APPS="$(build_sinfonia_client_apps_spec)"
-    NGINX_EXTERNAL_PORT="${NGINX_EXTERNAL_PORT:-80}"
-
     set_env_var "$nginx_env_file" "DOCKER_INTERNAL_NETWORK" "$DOCKER_INTERNAL_NETWORK"
-    set_env_var "$nginx_env_file" "API_UPSTREAM_HOST" "$MAESTRO_API_CONTAINER"
-    set_env_var "$nginx_env_file" "API_UPSTREAM_PORT" "$api_port"
-    set_env_var "$nginx_env_file" "WEBSOCKET_UPSTREAM_HOST" "$MAESTRO_WEBSOCKET_CONTAINER"
-    set_env_var "$nginx_env_file" "WEBSOCKET_UPSTREAM_PORT" "$websocket_port"
-    # Quoted: generate-cluster.sh sources this file and host specs contain "|".
-    set_env_var "$nginx_env_file" "SINFONIA_CLIENT_APPS" "$(quote_env_value "$SINFONIA_CLIENT_APPS")"
+    # Kept so systemUp.sh can regenerate the gateway without asking again.
+    set_env_var "$nginx_env_file" "NGINX_NUM_NODES" "$NGINX_NUM_NODES"
+    set_env_var "$nginx_env_file" "NGINX_NUM_API_BACKENDS" "$NGINX_NUM_API_BACKENDS"
+    set_env_var "$nginx_env_file" "NGINX_NUM_WEBSOCKET_BACKENDS" "$NGINX_NUM_WEBSOCKET_BACKENDS"
     set_env_var "$nginx_env_file" "SINFONIA_FRONTEND_REPLICAS" "${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
-    set_env_var "$nginx_env_file" "NGINX_EXTERNAL_PORT" "$NGINX_EXTERNAL_PORT"
-    set_env_var "$nginx_env_file" "NGINX_LISTEN_PORT" "80"
     set_env_var "$nginx_env_file" "FRONTEND_UPSTREAM_PORT" "80"
 
     print_status "Nginx cluster .env synchronized with deployment settings"
@@ -923,13 +1073,10 @@ setup_nginx_gateway() {
     (
         cd "$NGINX_CLUSTER_DIR"
         export NGINX_DEPLOY_MODE=true
-        export MAESTRO_ENV_FILE
         export NGINX_NUM_NODES
-        export NGINX_EXTERNAL_PORT
         export NGINX_NUM_FRONTEND_BACKENDS="${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
         export NGINX_NUM_API_BACKENDS
         export NGINX_NUM_WEBSOCKET_BACKENDS
-        export SINFONIA_CLIENT_APPS
         export SINFONIA_FRONTEND_REPLICAS="${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
         ./generate-cluster.sh
     )
@@ -968,6 +1115,8 @@ configure_maestro_nginx_gateway() {
 }
 
 setup_mandatory_nginx_gateway() {
+    local nginx_env_file="${NGINX_CLUSTER_DIR}/.env"
+
     if [ "${#SINFONIA_APP_IDS[@]}" -eq 0 ]; then
         if ! load_sinfonia_apps_manifest "$SINFONIA_APPS_ENV_FILE"; then
             print_error "Sinfonia client apps were not configured. Run the client-app selection step first."
@@ -976,12 +1125,16 @@ setup_mandatory_nginx_gateway() {
     fi
 
     if cluster_is_generated "$NGINX_CLUSTER_DIR"; then
-        print_status "Regenerating Nginx gateway for selected Sinfonia clients"
-        NGINX_EXTERNAL_PORT="${NGINX_EXTERNAL_PORT:-$(parse_nginx_external_port)}"
+        print_status "Regenerating Nginx gateway for the Sinfonia clients of every instance"
+        # The gateway is shared: keep the node and upstream counts it was created with.
+        NGINX_NUM_NODES="$(read_env_value "$nginx_env_file" "NGINX_NUM_NODES")"
         NGINX_NUM_NODES="${NGINX_NUM_NODES:-1}"
-        NGINX_NUM_FRONTEND_BACKENDS="${SINFONIA_FRONTEND_REPLICAS:-${NGINX_NUM_FRONTEND_BACKENDS:-1}}"
+        NGINX_NUM_FRONTEND_BACKENDS="$(read_env_value "$nginx_env_file" "SINFONIA_FRONTEND_REPLICAS")"
+        NGINX_NUM_FRONTEND_BACKENDS="${NGINX_NUM_FRONTEND_BACKENDS:-1}"
         SINFONIA_FRONTEND_REPLICAS="$NGINX_NUM_FRONTEND_BACKENDS"
+        NGINX_NUM_API_BACKENDS="$(read_env_value "$nginx_env_file" "NGINX_NUM_API_BACKENDS")"
         NGINX_NUM_API_BACKENDS="${NGINX_NUM_API_BACKENDS:-1}"
+        NGINX_NUM_WEBSOCKET_BACKENDS="$(read_env_value "$nginx_env_file" "NGINX_NUM_WEBSOCKET_BACKENDS")"
         NGINX_NUM_WEBSOCKET_BACKENDS="${NGINX_NUM_WEBSOCKET_BACKENDS:-1}"
         setup_nginx_gateway
         configure_maestro_nginx_gateway
@@ -1114,6 +1267,11 @@ print_deploy_summary() {
     echo -e "${GREEN}================================================================${NC}"
     echo ""
 
+    echo -e "${BLUE}Instance${NC}"
+    echo "  - ${ARPEGGIO_INSTANCE}"
+    echo "  - Maestro env (edit here, then re-run systemUp.sh): ${MAESTRO_ENV_FILE}"
+    echo ""
+
     echo -e "${BLUE}Modules (${#CLEANED_MODULES[@]})${NC}"
     for i in "${!CLEANED_MODULES[@]}"; do
         module="${CLEANED_MODULES[$i]}"
@@ -1214,9 +1372,9 @@ print_deploy_summary() {
 
     echo -e "${BLUE}Bring the stack online${NC}"
     echo "  Configuration and source preparation are complete."
-    echo "  To build images and start the full Arpeggio stack, run:"
+    echo "  To build images and start instance ${ARPEGGIO_INSTANCE} (other instances keep running), run:"
     echo ""
-    echo "    cd ${SCRIPT_DIR} && ./systemUp.sh"
+    echo "    cd ${SCRIPT_DIR} && ./systemUp.sh ${ARPEGGIO_INSTANCE}"
     echo ""
 
     echo -e "${GREEN}Deployment sources ready in: ${DEPLOY_DIR}${NC}"
@@ -1424,10 +1582,11 @@ fi
 
 IFS=',' read -r -a SELECTED_MODULES <<< "$module_input"
 
-# Remove empty entries (e.g. trailing commas)
+# Remove empty entries (e.g. trailing commas). "core" is the base repository of
+# every deployment, not a module repository, so it is always included.
 CLEANED_MODULES=()
 for module in "${SELECTED_MODULES[@]}"; do
-    if [ -n "$module" ]; then
+    if [ -n "$module" ] && [ "$(echo "$module" | tr '[:upper:]' '[:lower:]')" != "core" ]; then
         CLEANED_MODULES+=("$module")
     fi
 done
@@ -1442,8 +1601,11 @@ for module in "${CLEANED_MODULES[@]}"; do
     echo "  - $module"
 done
 
+prompt_instance
+ensure_instance_maestro_env
+
 echo -e ""
-print_status "Ready to continue, a deploy folder will be created that contains all codes to deploy"
+print_status "Ready to continue, ${DEPLOY_DIR} will be created that contains all codes to deploy"
 echo ""
 
 read -r -p "Enter Docker internal network name [default: ${DEFAULT_INTERNAL_NETWORK}]: " network_input
@@ -1657,5 +1819,6 @@ setup_mandatory_nginx_gateway
 
 copy_maestro_secrets_to_deploy
 copy_maestro_env_to_deploy
+echo "$ARPEGGIO_INSTANCE" > "$ARPEGGIO_CURRENT_INSTANCE_FILE"
 
 print_deploy_summary

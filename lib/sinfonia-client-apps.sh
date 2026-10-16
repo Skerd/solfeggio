@@ -43,18 +43,20 @@ strip_env_quotes() {
     printf '%s\n' "$value"
 }
 
+# Container, image and upstream names carry ARPEGGIO_INSTANCE (lib/instances.sh)
+# when one is set, so several instances can run the same client id on one host.
 sinfonia_frontend_container() {
-    echo "frontend-$1"
+    echo "frontend-${ARPEGGIO_INSTANCE:+${ARPEGGIO_INSTANCE}-}$1"
 }
 
 sinfonia_frontend_image() {
     local prefix="${ARPEGGIO_FRONTEND_IMAGE_PREFIX:-arpeggio-frontend}"
-    echo "${prefix}-$1:latest"
+    echo "${prefix}-${ARPEGGIO_INSTANCE:+${ARPEGGIO_INSTANCE}-}$1:latest"
 }
 
 sinfonia_frontend_upstream() {
     # Nginx upstream names: [a-zA-Z0-9_]
-    echo "frontend_$(echo "$1" | tr '-' '_')"
+    echo "frontend_$(echo "${ARPEGGIO_INSTANCE:+${ARPEGGIO_INSTANCE}-}$1" | tr '-' '_')"
 }
 
 # Mounted (non-root) clients use /{id}App/ — e.g. public -> /publicApp/, foo -> /fooApp/.
