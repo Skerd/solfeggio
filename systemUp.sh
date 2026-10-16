@@ -472,7 +472,9 @@ validate_cluster_bind_mounts() {
 }
 
 # Generated compose files pin the external network under networks.*.name.
-# deploy.sh updates cluster .env without rewriting those files.
+# deploy.sh updates cluster .env without rewriting those files, so a renamed
+# network (pronix_internal_network -> arpeggio_internal_network) leaves the
+# compose file pointing at a network this run does not create.
 read_compose_external_network_name() {
     local compose_file="$1"
 
@@ -486,6 +488,33 @@ read_compose_external_network_name() {
             exit
         }
     ' "$compose_file"
+}
+
+align_compose_external_network() {
+    local compose_file="$1"
+    local declared_network tmp
+
+    declared_network="$(read_compose_external_network_name "$compose_file")"
+    if [ -z "$declared_network" ] || [ "$declared_network" = "$DOCKER_INTERNAL_NETWORK" ]; then
+        return 0
+    fi
+
+    tmp="$(mktemp)"
+    awk -v from="$declared_network" -v to="$DOCKER_INTERNAL_NETWORK" '
+        /^networks:/ { in_networks = 1 }
+        in_networks && /^[^[:space:]]/ && !/^networks:/ { in_networks = 0 }
+        in_networks && /^[[:space:]]+name:/ {
+            value = $0
+            sub(/^[[:space:]]+name:[[:space:]]*/, "", value)
+            gsub(/["'\'']/, "", value)
+            if (value == from) {
+                sub(/name:.*/, "name: " to)
+            }
+        }
+        { print }
+    ' "$compose_file" > "$tmp"
+    mv "$tmp" "$compose_file"
+    print_status "Joined ${compose_file} to ${DOCKER_INTERNAL_NETWORK} (was ${declared_network})"
 }
 
 start_cluster_if_generated() {
@@ -504,13 +533,8 @@ start_cluster_if_generated() {
         return 1
     fi
 
+    align_compose_external_network "$compose_file"
     declared_network="$(read_compose_external_network_name "$compose_file")"
-    if [ -n "$declared_network" ] && [ "$declared_network" != "$DOCKER_INTERNAL_NETWORK" ]; then
-        print_error "${label} compose file joins ${declared_network}, but this run creates ${DOCKER_INTERNAL_NETWORK}."
-        print_error "Regenerate that cluster, or set networks.*.name in ${compose_file} to ${DOCKER_INTERNAL_NETWORK}."
-        return 1
-    fi
-
     if [ -n "$declared_network" ] && ! docker network inspect "$declared_network" >/dev/null 2>&1; then
         print_error "Docker network not found: ${declared_network}"
         print_error "Create it with: docker network create ${declared_network}"
