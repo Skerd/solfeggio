@@ -356,7 +356,7 @@ get_user_input() {
     echo -e "Ready to configure the Nginx gateway cluster, please provide the needed information:"
     echo -e ""
     echo -e "Path mode: ${GREEN}core,public${NC}  (first at /, others at /<appId>App/)"
-    echo -e "Host mode: ${GREEN}dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al${NC}"
+    echo -e "Host mode: ${GREEN}dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al${NC} (shop catch-all: ${GREEN}public@*.arpeggio.al${NC})"
     echo -e "www aliases are added automatically (dyeus.al ↔ www.dyeus.al)."
     echo -e "Extra aliases: ${GREEN}public@pronix.al|shop.pronix.al${NC}"
     echo -e ""

@@ -11,6 +11,7 @@
 #   dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al
 #   www.<host> is paired automatically (dyeus.al ↔ www.dyeus.al).
 #   Extra aliases: public@pronix.al|shop.pronix.al
+#   Shop catch-all: public@*.arpeggio.al (no www pair)
 #
 # Path-mode non-root apps are still mounted at `/<id>App/`; each SPA is always
 # built and served at `/` (one hostname per client, or gateway prefix strip).
@@ -79,6 +80,27 @@ normalize_sinfonia_url_path() {
     echo "/${raw}/"
 }
 
+# True for a single-label nginx wildcard (*.arpeggio.al). Nested (*.*.x) is rejected.
+# Glob match, not regex: a leading `*` is a repetition operator in zsh `=~`.
+is_sinfonia_wildcard_host() {
+    local host="${1:-}"
+    local rest
+    if [[ "$host" != \*.* ]]; then
+        return 1
+    fi
+    rest="${host#*.}"
+    if [[ "$rest" == *'*'* ]]; then
+        return 1
+    fi
+    if [[ ! "$rest" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+        return 1
+    fi
+    if [ "$rest" != "localhost" ] && [[ "$rest" != *.* ]]; then
+        return 1
+    fi
+    return 0
+}
+
 # True when the mount target is a hostname list (not a URL path / legacy port).
 is_sinfonia_host_mount() {
     local raw="${1:-}"
@@ -88,24 +110,36 @@ is_sinfonia_host_mount() {
         return 1
     fi
     raw="$(echo "$raw" | tr '|' ' ')"
+    set -f
     for host in $raw; do
         [ -n "$host" ] || continue
+        if is_sinfonia_wildcard_host "$host"; then
+            continue
+        fi
         if [[ ! "$host" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+            set +f
             return 1
         fi
         # Require a dot (or localhost) so "publicApp" is not treated as a host.
         if [ "$host" != "localhost" ] && [[ "$host" != *.* ]]; then
+            set +f
             return 1
         fi
     done
+    set +f
     return 0
 }
 
 # Apex/subdomain ↔ www pair used as an nginx server_name alias.
 # dyeus.al → www.dyeus.al ; www.pronix.al → pronix.al ; localhost/IPs unchanged.
+# Wildcard hosts (*.arpeggio.al) have no www pair — www.*.zone is not a valid name.
 sinfonia_paired_www_host() {
     local host="${1:-}"
     if [ -z "$host" ] || [ "$host" = "localhost" ] || [[ "$host" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        echo ""
+        return 0
+    fi
+    if is_sinfonia_wildcard_host "$host"; then
         echo ""
         return 0
     fi
@@ -140,6 +174,7 @@ normalize_sinfonia_hosts() {
     }
 
     raw="$(echo "$raw" | tr -d '[:space:]' | tr '|' ' ')"
+    set -f
     for host in $raw; do
         [ -n "$host" ] || continue
         if ! _sinfonia_hosts_contains "$host"; then
@@ -150,6 +185,7 @@ normalize_sinfonia_hosts() {
             hosts+=("$pair")
         fi
     done
+    set +f
     unset -f _sinfonia_hosts_contains
     if [ "${#hosts[@]}" -eq 0 ]; then
         return 1
@@ -175,6 +211,9 @@ sinfonia_app_public_url() {
 
     if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
         host="$(sinfonia_app_primary_host "$idx")"
+        if is_sinfonia_wildcard_host "$host"; then
+            host="${host#*.}"
+        fi
         if [ -z "$host" ]; then
             echo "http://localhost:${gateway_port}/"
             return 0
@@ -235,6 +274,9 @@ sinfonia_app_browser_origin() {
 
     if [ "${SINFONIA_GATEWAY_MODE:-path}" = "host" ]; then
         host="$(sinfonia_app_primary_host "$idx")"
+        if is_sinfonia_wildcard_host "$host"; then
+            host="${host#*.}"
+        fi
         if [ -z "$host" ] || sinfonia_url_is_loopback "$host"; then
             echo ""
             return 0
@@ -452,10 +494,12 @@ parse_sinfonia_client_apps() {
             return 1
         fi
     else
+        set -f
         for i in "${!SINFONIA_APP_IDS[@]}"; do
             for h in ${SINFONIA_APP_HOSTS[$i]}; do
                 for primary in "${all_hosts[@]+"${all_hosts[@]}"}"; do
                     if [ "$primary" = "$h" ]; then
+                        set +f
                         echo "Duplicate domain \"${h}\" for Sinfonia clients" >&2
                         return 1
                     fi
@@ -463,6 +507,7 @@ parse_sinfonia_client_apps() {
                 all_hosts+=("$h")
             done
         done
+        set +f
     fi
 
     return 0

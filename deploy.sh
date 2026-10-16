@@ -863,6 +863,7 @@ prompt_sinfonia_client_apps() {
     echo "Host mode (one domain per SPA, each at /):"
     echo "  dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al"
     echo "  www.<domain> is added automatically; extra aliases: public@pronix.al|shop.pronix.al"
+    echo "  shop catch-all: core@panel.arpeggio.al,public@*.arpeggio.al"
     echo ""
     if [ -n "$available" ]; then
         echo "Available apps in cloned Sinfonia: ${available}"
