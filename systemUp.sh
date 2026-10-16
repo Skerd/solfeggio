@@ -471,10 +471,28 @@ validate_cluster_bind_mounts() {
     return "$failed"
 }
 
+# Generated compose files pin the external network under networks.*.name.
+# deploy.sh updates cluster .env without rewriting those files.
+read_compose_external_network_name() {
+    local compose_file="$1"
+
+    awk '
+        /^networks:/ { in_networks = 1; next }
+        in_networks && /^[^[:space:]]/ { exit }
+        in_networks && /^[[:space:]]+name:/ {
+            sub(/^[[:space:]]+name:[[:space:]]*/, "")
+            gsub(/["'\'']/, "")
+            print
+            exit
+        }
+    ' "$compose_file"
+}
+
 start_cluster_if_generated() {
     local label="$1"
     local cluster_dir="$2"
     local compose_file="${cluster_dir}/docker-compose.yml"
+    local declared_network compose_status=0
 
     if [ ! -f "$compose_file" ]; then
         print_status "Skipping ${label}: no generated docker-compose.yml"
@@ -486,12 +504,30 @@ start_cluster_if_generated() {
         return 1
     fi
 
+    declared_network="$(read_compose_external_network_name "$compose_file")"
+    if [ -n "$declared_network" ] && [ "$declared_network" != "$DOCKER_INTERNAL_NETWORK" ]; then
+        print_error "${label} compose file joins ${declared_network}, but this run creates ${DOCKER_INTERNAL_NETWORK}."
+        print_error "Regenerate that cluster, or set networks.*.name in ${compose_file} to ${DOCKER_INTERNAL_NETWORK}."
+        return 1
+    fi
+
+    if [ -n "$declared_network" ] && ! docker network inspect "$declared_network" >/dev/null 2>&1; then
+        print_error "Docker network not found: ${declared_network}"
+        print_error "Create it with: docker network create ${declared_network}"
+        return 1
+    fi
+
     echo ""
     print_status "Starting ${label} cluster (${cluster_dir})"
-    (
+    # Called from `if !`, which disables set -e for this whole function.
+    if ! (
         cd "$cluster_dir"
         docker_compose up -d --build
-    )
+    ); then
+        compose_status=$?
+        print_error "${label} cluster failed to start (docker compose exit ${compose_status})"
+        return 1
+    fi
 
     STARTED_CLUSTERS+=("$label")
     print_status "${label} cluster is up"
@@ -509,7 +545,8 @@ start_infrastructure_clusters() {
         label="${cluster_spec%%|*}"
         cluster_dir="${cluster_spec#*|}"
         if ! start_cluster_if_generated "$label" "$cluster_dir"; then
-            print_warning "${label} was not started due to validation errors"
+            print_error "${label} cluster failed to start"
+            exit 1
         fi
     done
 }
@@ -521,7 +558,8 @@ start_gateway_cluster() {
     echo -e "${BLUE}================================================================${NC}"
 
     if ! start_cluster_if_generated "Nginx gateway" "$NGINX_CLUSTER_DIR"; then
-        print_warning "Nginx gateway was not started due to validation errors"
+        print_error "Nginx gateway failed to start"
+        exit 1
     fi
 }
 
