@@ -323,7 +323,7 @@ Core repos are cloned from GitHub during `./deploy.sh`:
 
 Branch selection is prompted per core and per module. All default to `main`.
 
-Available modules depend on what exists in the Skerd GitHub organization (e.g. `eCommerce`, `eCommerceMarketplace`, `propertyManagement`).
+Available modules depend on what exists in the Skerd GitHub organization (e.g. `eCommerce`, `propertyManagement`).
 
 ## Related documentation
 
