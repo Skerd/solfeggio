@@ -1185,10 +1185,20 @@ copy_maestro_env_to_deploy() {
 
 generate_modules_manifest() {
     local manifest_file="${DEPLOY_DIR}/scripts/modules.manifest.json"
+    local repo_manifest="${SCRIPT_DIR}/../scripts/modules.manifest.json"
     local module
     local first=true
 
     mkdir -p "${DEPLOY_DIR}/scripts"
+
+    # The repository manifest carries the real dependencies (eCommerce needs finance, …):
+    # companies are granted modules with their dependency closure, so a generated
+    # core-only manifest would hand out modules without what they need.
+    if [ -f "$repo_manifest" ]; then
+        cp "$repo_manifest" "$manifest_file"
+        print_status "Copied module manifest: ${repo_manifest} -> ${manifest_file}"
+        return 0
+    fi
 
     {
         echo "{"
