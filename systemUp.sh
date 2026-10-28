@@ -376,6 +376,10 @@ build_sinfonia_app_image() {
         -t "$image_tag"
         --build-arg "VITE_SINFONIA_APP=${app_id}"
     )
+    # The portal keeps its session in a cookie on its zone, so its build needs the zone.
+    if [ "$app_id" = "portal" ]; then
+        build_args+=(--build-arg "VITE_PORTAL_ROOT_DOMAIN=$(read_env_value "$INSTANCE_MAESTRO_ENV_FILE" "PORTAL_ROOT_DOMAIN")")
+    fi
     if [ "$DOCKER_BUILD_NO_CACHE" = "true" ]; then
         build_args+=(--no-cache)
         print_status "Building without cache (--no-cache)"

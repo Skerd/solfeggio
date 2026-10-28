@@ -92,7 +92,7 @@ Interactive wizard that:
 4. Clones or updates **Armonia**, **Maestro**, and **Sinfonia** core repos plus per-module repos from GitHub
 5. Prompts for **Sinfonia client apps** to deploy:
    - Path mode: comma-separated ids under `src/modules/*/apps/` (e.g. `core,public`)
-   - Host mode: `id@domain` mounts (e.g. `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`). `www.` is added automatically. A shop catch-all is `public@*.arpeggio.al` (no www pair).
+   - Host mode: `id@domain` mounts (e.g. `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`). `www.` is added automatically. The portal serves its apex and every company site: `portal@arpeggio.al|*.arpeggio.al` (the wildcard gets no www pair).
 6. Generates `deploy/<instance>/scripts/modules.manifest.json` and `sinfonia-apps.env`
 7. Configures optional and required **infrastructure clusters** (generated once, reused by later instances) and assigns the instance its MongoDB database, Redis database and Kafka prefix
 8. Copies the instance's Maestro env into `deploy/<instance>/maestro/.env`
@@ -220,7 +220,7 @@ Each client is a separate nginx `server_name` vhost at `/`. `/api/` and `/ws/` a
 
 Example selection: `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`
 
-`www.<domain>` is paired automatically (`dyeus.al` also serves `www.dyeus.al`). Extra aliases still use `|` (`public@pronix.al|shop.pronix.al`). A leading `*.zone` catch-all (`public@*.arpeggio.al`) is a valid host and does not get a www pair; nginx exact names (`panel.arpeggio.al`) still win over that wildcard. Unmatched Host headers return 404 instead of the first client's SPA.
+`www.<domain>` is paired automatically (`dyeus.al` also serves `www.dyeus.al`). Extra aliases still use `|` (`public@pronix.al|shop.pronix.al`). A leading `*.zone` catch-all (`portal@arpeggio.al|*.arpeggio.al`) is a valid host and does not get a www pair; nginx exact names (`panel.arpeggio.al`) still win over that wildcard. Unmatched Host headers return 404 instead of the first client's SPA.
 
 Client selection and gateway port are stored per instance in `deploy/<instance>/scripts/sinfonia-apps.env`; the gateway generator reads that file for every instance.
 
@@ -253,8 +253,7 @@ Each instance's Maestro environment is managed through `apps/maestro/instances/<
 - `CLAMAV_*` — host/port (when ClamAV is enabled)
 - `CLIENT_HOST` — public origin of the **core/panel** SPA (auth emails, Stripe). Derived from the selected `core` client's domain in host mode (`https://panel.pronix.al`). Never `localhost` or the Docker-internal gateway. Left unchanged when no public origin exists (path mode without a real domain).
 - `SINFONIA_CLIENT_URLS` — per-app map written from the same selection, e.g. `core=https://panel.pronix.al,public=https://pronix.al,dyeus=https://dyeus.al`. Maestro uses this so shop/public/panel mail links hit the matching SPA. `CLIENT_NAME` is left as-is.
-- `SHOP_ROOT_DOMAIN` — zone for per-company shops (`{slug}.arpeggio.al`). Set this on the instance env (`arpeggio.al`). Locally use `localhost` so `http://localhost:<shopPort>` is platform (all sellers) and `{slug}.localhost` is a single company. Company create still succeeds when it is empty; the shop provision step stays failed until it is set. Empty root still treats bare `localhost` as platform for local DX. The apex host (`arpeggio.al` / `www.arpeggio.al`) is platform mode: the shop SPA lists all companies' products and services (do not put the apex host on a single company's `allowedDomains`). Ensure nginx serves the shop SPA on that exact apex host (exact hosts win over the `*.` catch-all).
-- `PORTAL_ROOT_DOMAIN` — host of the central portal (`portal.arpeggio.al`), served by the `portal` client (`portal@portal.arpeggio.al` in the client selection). Optional: empty means no portal. On that host, pages name their company in the `x-site-company` header, and portal accounts belong to the platform-owner company. Put the portal host on no company's `allowedDomains`.
+- `PORTAL_ROOT_DOMAIN` — apex of the portal zone (`arpeggio.al`), served by the `portal` client (`portal@arpeggio.al|*.arpeggio.al` in the client selection; its image is built with this value, because the session cookie spans the zone). The apex lists every company that opted in; `{siteSlug}.arpeggio.al` is that company's own site, resolved from the host (reserved labels such as `panel` and `www` are not company sites). One sign-in covers the whole zone, and portal accounts belong to the platform-owner company. On the apex, a page about one company names it in the `x-site-company` header. Optional: empty means no portal. Put zone hosts on no company's `allowedDomains`.
 - `ENABLED_MODULES` — comma-separated module list matching the deploy selection. It is the server's ceiling: each company only gets the modules the platform owner granted it (`Company.modules`, Companies → Manage modules). For one instance serving every vertical, select every module. Existing companies need `npm run migrate:backfill-company-modules -- --execute --platform-owner=<companyId>` once.
 
 The finalized env is copied to `deploy/<instance>/maestro/.env` for container runtime, by `./deploy.sh` and again by every `./systemUp.sh`.

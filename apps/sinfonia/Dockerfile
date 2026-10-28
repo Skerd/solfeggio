@@ -26,6 +26,9 @@ COPY sinfonia ./
 
 ARG VITE_SINFONIA_APP=core
 ENV VITE_SINFONIA_APP=$VITE_SINFONIA_APP
+# Portal only: the zone whose apex and company sites share one session cookie.
+ARG VITE_PORTAL_ROOT_DOMAIN=
+ENV VITE_PORTAL_ROOT_DOMAIN=$VITE_PORTAL_ROOT_DOMAIN
 
 RUN npm run build
 
