@@ -7,8 +7,14 @@
 **/.vite
 **/.turbo
 **/.DS_Store
-**/coverage
+# Test coverage reports (vitest writes them at each package root). Not `**/coverage`: sinfonia has a studio
+# source folder named `coverage`, which that pattern dropped from every image.
+armonia/coverage
+maestro/coverage
+sinfonia/coverage
 **/.env
 **/.env.*
+# The tracked test template (no secrets): maestro tests read it, since an image has no .env (D08 deploy gate).
+!maestro/.env.test
 **/.build-logs
 **/*.log

@@ -41,10 +41,9 @@ WORKDIR /armonia
 COPY armonia/package.json armonia/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund --legacy-peer-deps
 
-# Zod v4: explicit ZodPipe return type on preprocess() fails tsc; infer from z.preprocess().
 COPY armonia ./
-RUN sed -i 's/function withNumericFormDataPreprocess<T extends z.ZodTypeAny>(inner: T): z.ZodPipe<z.ZodTransform<unknown, unknown>, T> {/function withNumericFormDataPreprocess<T extends z.ZodTypeAny>(inner: T) {/' src/modules/core/helpers/zodBuilder.ts
-RUN npm run build
+# Deploy gate (D07/D08): `build` type-checks armonia; its tests must pass too, or no image is built.
+RUN npm run build && npx vitest run
 
 # Maestro deps + native addons — cached unless package.json changes.
 WORKDIR /maestro
@@ -55,6 +54,12 @@ RUN npm rebuild bcrypt canvas sharp --foreground-scripts
 
 COPY maestro ./
 COPY scripts/ ./scripts/
+
+# Deploy gate (D07/D08): the modules assembled for this instance must type-check and pass their tests, or no image
+# is built. The tests start in-memory MongoDB (cached between builds); its version has no Debian 12 build for every
+# CPU, so it uses the Ubuntu 22.04 build, which runs on this image.
+RUN --mount=type=cache,target=/root/.cache/mongodb-binaries \
+    node_modules/.bin/tsc --noEmit -p . && MONGOMS_DISTRO=ubuntu-22.04 npx vitest run
 
 EXPOSE 81
 

@@ -17,7 +17,8 @@ WORKDIR /armonia
 COPY armonia/package.json armonia/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund --legacy-peer-deps
 COPY armonia ./
-RUN npm run build
+# Deploy gate (D07/D08): `build` type-checks armonia; its tests must pass too.
+RUN npm run build && npx vitest run
 
 # The module manifest lives in maestro core (D01a); `VITE_ENABLED_MODULES` resolves dependencies from it.
 COPY maestro/modules/core/modules.manifest.json /maestro/modules/core/modules.manifest.json
@@ -26,6 +27,10 @@ WORKDIR /sinfonia
 COPY sinfonia/package.json ./
 RUN --mount=type=cache,target=/root/.npm npm install --legacy-peer-deps --no-audit --no-fund
 COPY sinfonia ./
+
+# Deploy gate (D07/D08): the modules assembled for this instance must type-check and pass their tests, or no image is
+# built. Before the app ARG, so every app image of one deploy shares this layer and it runs once.
+RUN npm run typecheck && npx vitest run
 
 ARG VITE_SINFONIA_APP=core
 ENV VITE_SINFONIA_APP=$VITE_SINFONIA_APP

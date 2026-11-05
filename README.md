@@ -309,6 +309,8 @@ docker build -f apps/sinfonia/Dockerfile \
 
 `systemUp.sh` copies `apps/deploy.dockerignore` to `deploy/<instance>/.dockerignore` so git metadata and `node_modules` are not sent as build context. Vite `ARG`s are applied after `npm install`, so core/public/dyeus share dependency layers and only the Vite step differs.
 
+**Deploy gate (D07/D08):** an image builds only if the modules in its context type-check and pass their tests: armonia `build` + tests in both images, maestro `tsc --noEmit` + vitest (in-memory MongoDB, Ubuntu 22.04 build, cached), sinfonia `typecheck` + vitest once per deploy (before the app `ARG`, so all app images share it). Maestro tests take their settings from `vitest.config.ts` and `maestro/.env.test` (no secrets; the only `.env*` file the build context keeps). The sinfonia `vite build` needs about 6 GB of memory.
+
 `systemUp.sh` builds whichever clients were selected in `./deploy.sh`. Override naming with:
 
 - `ARPEGGIO_MAESTRO_IMAGE` (default: `arpeggio-maestro-<instance>:latest`)
