@@ -263,35 +263,15 @@ ensure_internal_network() {
 }
 
 prepare_maestro_build_context() {
-    local manifest_dest="${DEPLOY_DIR}/scripts/modules.manifest.json"
-    local manifest_src=""
-
-    if [ -f "$manifest_dest" ]; then
-        print_status "Using deployment-generated module manifest: ${manifest_dest}"
-        sync_maestro_build_scripts
-        return 0
-    fi
-
-    if [ -f "${SCRIPT_DIR}/scripts/modules.manifest.json" ]; then
-        manifest_src="${SCRIPT_DIR}/scripts/modules.manifest.json"
-    elif [ -f "${SCRIPT_DIR}/apps/maestro/scripts/modules.manifest.json" ]; then
-        manifest_src="${SCRIPT_DIR}/apps/maestro/scripts/modules.manifest.json"
-    elif [ -f "${MAESTRO_DIR}/scripts/modules.manifest.json" ]; then
-        manifest_src="${MAESTRO_DIR}/scripts/modules.manifest.json"
-    fi
-
-    if [ -z "$manifest_src" ]; then
-        print_error "Missing modules.manifest.json for Maestro image build."
-        print_error "Run ./deploy.sh first to generate ${manifest_dest}, or place a manifest at:"
-        print_error "  ${SCRIPT_DIR}/scripts/modules.manifest.json"
-        print_error "  ${SCRIPT_DIR}/apps/maestro/scripts/modules.manifest.json"
+    # The module manifest ships inside maestro core (D01a); both images read it from there.
+    local manifest="${MAESTRO_DIR}/modules/core/modules.manifest.json"
+    if [ ! -f "$manifest" ]; then
+        print_error "Missing ${manifest}. Run ./deploy.sh to fetch Maestro core."
         exit 1
     fi
 
     mkdir -p "${DEPLOY_DIR}/scripts"
-    cp "$manifest_src" "$manifest_dest"
     sync_maestro_build_scripts
-    print_status "Prepared Maestro build manifest: ${manifest_dest}"
 }
 
 sync_maestro_build_scripts() {

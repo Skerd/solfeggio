@@ -93,7 +93,7 @@ Interactive wizard that:
 5. Prompts for **Sinfonia client apps** to deploy:
    - Path mode: comma-separated ids under `src/modules/*/apps/` (e.g. `core,public`)
    - Host mode: `id@domain` mounts (e.g. `dyeus@dyeus.al,core@panel.pronix.al,public@pronix.al`). `www.` is added automatically. The portal serves its apex and every company site: `portal@arpeggio.al|*.arpeggio.al` (the wildcard gets no www pair).
-6. Generates `deploy/<instance>/scripts/modules.manifest.json` and `sinfonia-apps.env`
+6. Generates `deploy/<instance>/scripts/sinfonia-apps.env` (the module manifest ships with Maestro core: `maestro/modules/core/modules.manifest.json`)
 7. Configures optional and required **infrastructure clusters** (generated once, reused by later instances) and assigns the instance its MongoDB database, Redis database and Kafka prefix
 8. Copies the instance's Maestro env into `deploy/<instance>/maestro/.env`
 

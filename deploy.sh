@@ -1183,40 +1183,6 @@ copy_maestro_env_to_deploy() {
     print_status "Copied Maestro env to ${dest_file}"
 }
 
-generate_modules_manifest() {
-    local manifest_file="${DEPLOY_DIR}/scripts/modules.manifest.json"
-    local repo_manifest="${SCRIPT_DIR}/../scripts/modules.manifest.json"
-    local module
-    local first=true
-
-    mkdir -p "${DEPLOY_DIR}/scripts"
-
-    # The repository manifest carries the real dependencies (eCommerce needs finance, …):
-    # companies are granted modules with their dependency closure, so a generated
-    # core-only manifest would hand out modules without what they need.
-    if [ -f "$repo_manifest" ]; then
-        cp "$repo_manifest" "$manifest_file"
-        print_status "Copied module manifest: ${repo_manifest} -> ${manifest_file}"
-        return 0
-    fi
-
-    {
-        echo "{"
-        for module in "${CLEANED_MODULES[@]}"; do
-            if [ "$first" = true ]; then
-                first=false
-            else
-                echo ","
-            fi
-            printf '  "%s": {\n    "dependsOn": ["core"]\n  }' "$module"
-        done
-        echo ""
-        echo "}"
-    } > "$manifest_file"
-
-    print_status "Generated module manifest: ${manifest_file}"
-}
-
 sync_maestro_build_scripts_from_apps() {
     local scripts_src="${SCRIPT_DIR}/apps/maestro/scripts"
     local scripts_dest="${DEPLOY_DIR}/scripts"
@@ -1303,7 +1269,7 @@ print_deploy_summary() {
     echo "  - Maestro core:    ${MAESTRO_DIR} (${MAESTRO_CORE_BRANCH})"
     echo "  - Sinfonia core:   ${SINFONIA_DIR} (${SINFONIA_CORE_BRANCH})"
     echo "  - Maestro env:     ${deploy_maestro_env}"
-    echo "  - Module manifest: ${DEPLOY_DIR}/scripts/modules.manifest.json"
+    echo "  - Module manifest: ${MAESTRO_DIR}/modules/core/modules.manifest.json"
     echo ""
 
     echo -e "${BLUE}Infrastructure${NC}"
@@ -1761,7 +1727,6 @@ for i in "${!CLEANED_MODULES[@]}"; do
     clone_or_update_repo "$module_url" "$module_dir" "$module_branch" "sinfonia_${module}"
 done
 
-generate_modules_manifest
 sync_maestro_build_scripts_from_apps
 configure_maestro_enabled_modules
 

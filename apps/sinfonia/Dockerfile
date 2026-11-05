@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Build from the deploy folder (must contain armonia/ and sinfonia/):
+# Build from the deploy folder (must contain armonia/, sinfonia/ and maestro/ for its module manifest):
 #   docker build -f apps/sinfonia/Dockerfile \
 #     --build-arg VITE_SINFONIA_APP=<appId> \
 #     -t arpeggio-frontend-<appId>:latest deploy/
@@ -18,6 +18,9 @@ COPY armonia/package.json armonia/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm i --no-audit --no-fund --legacy-peer-deps
 COPY armonia ./
 RUN npm run build
+
+# The module manifest lives in maestro core (D01a); `VITE_ENABLED_MODULES` resolves dependencies from it.
+COPY maestro/modules/core/modules.manifest.json /maestro/modules/core/modules.manifest.json
 
 WORKDIR /sinfonia
 COPY sinfonia/package.json ./
