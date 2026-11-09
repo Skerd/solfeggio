@@ -165,7 +165,7 @@ solfeggio/
 ├── apps/
 │   ├── deploy.dockerignore
 │   ├── maestro/
-│   │   ├── Dockerfile     # Maestro image (Node 22, canvas, ffmpeg, opencv.js)
+│   │   ├── Dockerfile     # Maestro image: gated build stage + slim compiled runtime (Node 22, canvas, ffmpeg, opencv.js)
 │   │   ├── .env           # Maestro env template (gitignored; seed for new instances)
 │   │   └── instances/     # <instance>.env — Maestro env per instance (gitignored; edited by deploy.sh)
 │   └── sinfonia/
@@ -331,6 +331,8 @@ docker build -f apps/sinfonia/Dockerfile \
 `systemUp.sh` copies `apps/deploy.dockerignore` to `deploy/<instance>/.dockerignore` so git metadata and `node_modules` are not sent as build context. Vite `ARG`s are applied after `npm install`, so core/public/dyeus share dependency layers and only the Vite step differs.
 
 **Deploy gate (D07/D08):** an image builds only if the modules in its context type-check and pass their tests: armonia `build` + tests in both images, maestro `tsc` emit (`tsconfig.build.json`, D106) + vitest (in-memory MongoDB, Ubuntu 22.04 build, cached), sinfonia `typecheck` + vitest once per deploy (before the app `ARG`, so all app images share it). Maestro tests take their settings from `vitest.config.ts` and `maestro/.env.test` (no secrets; the only `.env*` file the build context keeps). The sinfonia `vite build` needs about 6 GB of memory.
+
+**Maestro runtime image (D106, TD-B118):** the build stage keeps the toolchain; the runtime stage is `node:22.14.0-bookworm-slim` (same Debian 12) with only `ghostscript`, `ffmpeg`, fonts and CA certificates, the compiled JavaScript and the installed dependencies (armonia's pruned to production ones), about 2 GB. The build fails if `bcrypt`, `canvas` or `sharp` cannot load on that base. Give Docker at least 8 GB of free memory for a build: tsc and the maestro tests run in it.
 
 `systemUp.sh` builds whichever clients were selected in `./deploy.sh`. Override naming with:
 

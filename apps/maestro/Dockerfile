@@ -5,8 +5,9 @@
 # Maestro declares `"armonia": "../armonia"`; that directory must sit next to maestro
 # under the build context. A context of only maestro/ breaks that link and npm install.
 #
-# Three stages (D106): `base` has the system packages, `build` installs, type-checks, tests and emits the JavaScript,
-# `runtime` holds only the compiled output and the installed dependencies, and runs it with plain node.
+# Three stages (D106): `base` has the build toolchain, `build` installs, type-checks, tests and emits the JavaScript,
+# then drops armonia's dev dependencies; `runtime` is the slim image of the same Debian release with only the programs the
+# servers run (ghostscript, ffmpeg) and the compiled output + production dependencies (TD-B118).
 
 FROM node:22.14.0-bookworm AS base
 
@@ -69,8 +70,23 @@ RUN --mount=type=cache,target=/root/.cache/mongodb-binaries \
     node_modules/.bin/tsc -p tsconfig.build.json && MONGOMS_DISTRO=ubuntu-22.04 npx vitest run \
     && node scripts/build/copyRuntimeAssets.mjs
 
-FROM base AS runtime
+# After the gate, armonia keeps only its production dependencies. Maestro's node_modules is not pruned yet (TD-B122):
+# maestro code imports decimal.js, which only armonia declares, and a prune moves it out of maestro's reach.
+RUN cd /armonia && npm prune --omit=dev --ignore-scripts --no-audit --no-fund --legacy-peer-deps
 
+# Same Debian release as the build, so the addons built there load here. bcrypt needs only libstdc++; canvas ships its
+# Cairo/Pango libraries inside its prebuilt binary and needs fontconfig's fonts; sharp bundles libvips. ghostscript and
+# ffmpeg are programs the servers run (floor-plan PDF import, media uploads); they also bring the fonts canvas uses.
+FROM node:22.14.0-bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ghostscript \
+    ffmpeg \
+    fonts-dejavu-core \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_OPTIONS="--max-old-space-size=6144"
 ENV NODE_ENV=production
 
 # Same layout as the sources: /armonia beside /maestro, so `armonia/*` (tsconfig paths) and the `../armonia`
@@ -81,6 +97,9 @@ COPY --from=build /maestro/node_modules /maestro/node_modules
 COPY --from=build /maestro/dist/maestro /maestro
 
 WORKDIR /maestro
+
+# No image if a native addon cannot load its libraries on this base.
+RUN node -e "require('bcrypt'); require('canvas'); require('sharp')"
 
 EXPOSE 81
 
