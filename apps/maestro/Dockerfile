@@ -6,7 +6,7 @@
 # under the build context. A context of only maestro/ breaks that link and npm install.
 #
 # Three stages (D106): `base` has the build toolchain, `build` installs, type-checks, tests and emits the JavaScript,
-# then drops armonia's dev dependencies; `runtime` is the slim image of the same Debian release with only the programs the
+# then drops maestro's and armonia's dev dependencies; `runtime` is the slim image of the same Debian release with only the programs the
 # servers run (ghostscript, ffmpeg) and the compiled output + production dependencies (TD-B118).
 
 FROM node:22.14.0-bookworm AS base
@@ -70,9 +70,11 @@ RUN --mount=type=cache,target=/root/.cache/mongodb-binaries \
     node_modules/.bin/tsc -p tsconfig.build.json && MONGOMS_DISTRO=ubuntu-22.04 npx vitest run \
     && node scripts/build/copyRuntimeAssets.mjs
 
-# After the gate, armonia keeps only its production dependencies. Maestro's node_modules is not pruned yet (TD-B122):
-# maestro code imports decimal.js, which only armonia declares, and a prune moves it out of maestro's reach.
-RUN cd /armonia && npm prune --omit=dev --ignore-scripts --no-audit --no-fund --legacy-peer-deps
+# After the gate, maestro and armonia keep only their production dependencies; --ignore-scripts keeps the rebuilt addons.
+# The prune must leave node_modules/armonia as the `../armonia` link.
+RUN npm prune --omit=dev --ignore-scripts --no-audit --no-fund \
+    && cd /armonia && npm prune --omit=dev --ignore-scripts --no-audit --no-fund --legacy-peer-deps \
+    && test -L /maestro/node_modules/armonia
 
 # Same Debian release as the build, so the addons built there load here. bcrypt needs only libstdc++; canvas ships its
 # Cairo/Pango libraries inside its prebuilt binary and needs fontconfig's fonts; sharp bundles libvips. ghostscript and
