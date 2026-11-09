@@ -254,7 +254,7 @@ Each instance's Maestro environment is managed through `apps/maestro/instances/<
 - `CLIENT_HOST` — public origin of the **core/panel** SPA (auth emails, Stripe). Derived from the selected `core` client's domain in host mode (`https://panel.pronix.al`). Never `localhost` or the Docker-internal gateway. Left unchanged when no public origin exists (path mode without a real domain).
 - `SINFONIA_CLIENT_URLS` — per-app map written from the same selection, e.g. `core=https://panel.pronix.al,public=https://pronix.al,dyeus=https://dyeus.al`. Maestro uses this so shop/public/panel mail links hit the matching SPA. `CLIENT_NAME` is left as-is.
 - `PORTAL_ROOT_DOMAIN` — apex of the portal zone (`arpeggio.al`), served by the `portal` client (`portal@arpeggio.al|*.arpeggio.al` in the client selection; its image is built with this value, because the session cookie spans the zone). The apex lists every company that opted in; `{siteSlug}.arpeggio.al` is that company's own site, resolved from the host (reserved labels such as `panel` and `www` are not company sites). One sign-in covers the whole zone, and portal accounts belong to the platform-owner company. On the apex, a page about one company names it in the `x-site-company` header. Optional: empty means no portal. Put zone hosts on no company's `allowedDomains`.
-- `ENABLED_MODULES` — comma-separated module list matching the deploy selection. It is the server's ceiling: each company only gets the modules the platform owner granted it (`Company.modules`, Companies → Manage modules). For one instance serving every vertical, select every module. Existing companies need `npm run migrate:backfill-company-modules -- --execute --platform-owner=<companyId>` once.
+- `ENABLED_MODULES` — comma-separated module list matching the deploy selection. It is the server's ceiling: each company only gets the modules the platform owner granted it (`Company.modules`, Companies → Manage modules). For one instance serving every vertical, select every module. A new company starts with `core`; the platform owner grants further modules in Companies → Manage modules (there is no backfill script: the platform launches on a fresh database, D19).
 
 - `HEALTH_DATA_MASTER_KEY` — the key that encrypts the instance's health data at rest (medical histories, X-rays; D102). `./deploy.sh` generates it once per instance (32 random bytes, base64) and never replaces it; a new instance starts without the template's key. Maestro refuses to start without it when a module that stores health data (dentalClinic) is enabled. **Back it up with the other secrets:** without it that data cannot be read, and restoring a database backup needs the key that was current when the backup was taken.
 
@@ -296,6 +296,17 @@ After stopping an instance, run `./systemUp.sh` for another instance to drop it 
 cd clusters/mongo
 docker compose ps
 docker compose logs -f
+```
+
+**Operator scripts:** the maestro image holds only compiled JavaScript (D106), so the `npm run` forms that use ts-node do not work there. Run each script's compiled file from the API container, with the same arguments:
+
+```bash
+# Replay a Kafka dead-letter topic: dry run first, then --execute (npm run kafka:replay-dlq)
+docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/replayKafkaDeadLetters.js <topic> [--execute]
+# Apply the demo company profiles and create missing demo companies (npm run sync:demo-companies)
+docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/syncDemoCompanies.js
+# Rewrap health-data keys after a master-key change (npm run health:rewrap-keys; see above)
+docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/rewrapHealthDataKeys.js
 ```
 
 ## Image build context
