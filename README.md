@@ -129,7 +129,7 @@ Works on one instance: the one named on the command line, or the one `./deploy.s
 | `maestroApi-<instance>` | `npm run api` | REST API |
 | `maestroKafka-<instance>` | `npm run kafka` | Kafka consumers |
 | `maestroWebsocket-<instance>` | `npm run websocket` | WebSocket server |
-| `maestroCron-<instance>` | `npm run cron` | Scheduled jobs |
+| `maestroCron-<instance>` | `npm run cron` | Scheduled jobs; at start it adds each company's missing job rows (`CRON_SEED_PLATFORM_JOBS=true`, set by every deploy) |
 | `maestroAssistant-<instance>` | `npm run assistant` | AI-channel responder |
 | `maestroTelegram-<instance>` | `npm run telegram` | Telegram bot long-poll + linking |
 

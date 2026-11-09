@@ -1211,6 +1211,13 @@ configure_maestro_enabled_modules() {
     print_status "Maestro ENABLED_MODULES set to: ${enabled_modules}"
 }
 
+# The cron server seeds each company's missing job rows at boot (seedPlatformCronJobs: it only adds rows, never changes
+# a company's own schedule), so a job a deploy brings in reaches the companies that already exist.
+configure_maestro_cron_seed() {
+    set_env_var "$MAESTRO_ENV_FILE" "CRON_SEED_PLATFORM_JOBS" "true"
+    print_status "Maestro CRON_SEED_PLATFORM_JOBS set to: true"
+}
+
 print_cluster_start_hint() {
     local label="$1"
     local cluster_dir="$2"
@@ -1729,6 +1736,7 @@ done
 
 sync_maestro_build_scripts_from_apps
 configure_maestro_enabled_modules
+configure_maestro_cron_seed
 
 prompt_sinfonia_client_apps
 
