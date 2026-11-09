@@ -219,6 +219,9 @@ ensure_instance_maestro_env() {
     # another deployment.
     set_env_var "$MAESTRO_ENV_FILE" "MONGODB_DB_NAME" ""
     set_env_var "$MAESTRO_ENV_FILE" "REDIS_DATABASE" ""
+    # Each instance's health data has its own master key (generated below).
+    set_env_var "$MAESTRO_ENV_FILE" "HEALTH_DATA_MASTER_KEY" ""
+    set_env_var "$MAESTRO_ENV_FILE" "HEALTH_DATA_MASTER_KEY_PREVIOUS" ""
 
     print_status "Created Maestro env for new instance ${ARPEGGIO_INSTANCE}: ${MAESTRO_ENV_FILE}"
     print_warning "It is a copy of ${MAESTRO_ENV_TEMPLATE}. Before ./systemUp.sh, review the values"
@@ -1211,6 +1214,24 @@ configure_maestro_enabled_modules() {
     print_status "Maestro ENABLED_MODULES set to: ${enabled_modules}"
 }
 
+# Health data at rest (D102): the master key that wraps every company's data keys. Generated once per instance and
+# never replaced here: a different key makes the instance's stored health data unreadable. Rotation is a manual step
+# (see README).
+ensure_health_data_master_key() {
+    local current_key
+
+    current_key="$(read_env_value "$MAESTRO_ENV_FILE" "HEALTH_DATA_MASTER_KEY")"
+    if [ -n "$current_key" ]; then
+        print_status "Maestro HEALTH_DATA_MASTER_KEY is set (kept)"
+        return 0
+    fi
+
+    set_env_var "$MAESTRO_ENV_FILE" "HEALTH_DATA_MASTER_KEY" "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+    print_status "Generated HEALTH_DATA_MASTER_KEY for instance ${ARPEGGIO_INSTANCE}"
+    print_warning "Back up HEALTH_DATA_MASTER_KEY from ${MAESTRO_ENV_FILE} with the other secrets:"
+    print_warning "without it the instance's health data (medical histories, X-rays) cannot be read."
+}
+
 # The cron server seeds each company's missing job rows at boot (seedPlatformCronJobs: it only adds rows, never changes
 # a company's own schedule), so a job a deploy brings in reaches the companies that already exist.
 configure_maestro_cron_seed() {
@@ -1737,6 +1758,7 @@ done
 sync_maestro_build_scripts_from_apps
 configure_maestro_enabled_modules
 configure_maestro_cron_seed
+ensure_health_data_master_key
 
 prompt_sinfonia_client_apps
 

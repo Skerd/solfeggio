@@ -256,7 +256,17 @@ Each instance's Maestro environment is managed through `apps/maestro/instances/<
 - `PORTAL_ROOT_DOMAIN` — apex of the portal zone (`arpeggio.al`), served by the `portal` client (`portal@arpeggio.al|*.arpeggio.al` in the client selection; its image is built with this value, because the session cookie spans the zone). The apex lists every company that opted in; `{siteSlug}.arpeggio.al` is that company's own site, resolved from the host (reserved labels such as `panel` and `www` are not company sites). One sign-in covers the whole zone, and portal accounts belong to the platform-owner company. On the apex, a page about one company names it in the `x-site-company` header. Optional: empty means no portal. Put zone hosts on no company's `allowedDomains`.
 - `ENABLED_MODULES` — comma-separated module list matching the deploy selection. It is the server's ceiling: each company only gets the modules the platform owner granted it (`Company.modules`, Companies → Manage modules). For one instance serving every vertical, select every module. Existing companies need `npm run migrate:backfill-company-modules -- --execute --platform-owner=<companyId>` once.
 
+- `HEALTH_DATA_MASTER_KEY` — the key that encrypts the instance's health data at rest (medical histories, X-rays; D102). `./deploy.sh` generates it once per instance (32 random bytes, base64) and never replaces it; a new instance starts without the template's key. Maestro refuses to start without it when a module that stores health data (dentalClinic) is enabled. **Back it up with the other secrets:** without it that data cannot be read, and restoring a database backup needs the key that was current when the backup was taken.
+
 The finalized env is copied to `deploy/<instance>/maestro/.env` for container runtime, by `./deploy.sh` and again by every `./systemUp.sh`.
+
+### Rotating the health-data master key
+
+The data is encrypted with per-company keys that are stored wrapped by the master key, so a rotation only rewraps those keys:
+
+1. Generate a new key (`openssl rand -base64 32`). In `apps/maestro/instances/<instance>.env`, move the current value to `HEALTH_DATA_MASTER_KEY_PREVIOUS` and put the new one in `HEALTH_DATA_MASTER_KEY`. Run `./systemUp.sh <instance>`: the servers read keys wrapped by either.
+2. Rewrap the keys from the API container: `docker exec maestroApi-<instance> npm run health:rewrap-keys`. A second run reports 0.
+3. Empty `HEALTH_DATA_MASTER_KEY_PREVIOUS` and run `./systemUp.sh <instance>` again. Keep the old key with the backups taken before step 2.
 
 ## Managing running services
 
