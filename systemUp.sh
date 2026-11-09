@@ -338,6 +338,12 @@ build_maestro_image() {
         print_status "Building without cache (--no-cache)"
     fi
 
+    # Keep the running image as :previous, so a bad release rolls back by tag (D106).
+    if docker image inspect "$MAESTRO_IMAGE" >/dev/null 2>&1; then
+        docker tag "$MAESTRO_IMAGE" "${MAESTRO_IMAGE%:*}:previous"
+        print_status "Tagged the current image as ${MAESTRO_IMAGE%:*}:previous"
+    fi
+
     docker build "${build_args[@]}" "$DEPLOY_DIR"
 
     print_status "Maestro image built successfully"

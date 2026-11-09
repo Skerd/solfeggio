@@ -265,7 +265,7 @@ The finalized env is copied to `deploy/<instance>/maestro/.env` for container ru
 The data is encrypted with per-company keys that are stored wrapped by the master key, so a rotation only rewraps those keys:
 
 1. Generate a new key (`openssl rand -base64 32`). In `apps/maestro/instances/<instance>.env`, move the current value to `HEALTH_DATA_MASTER_KEY_PREVIOUS` and put the new one in `HEALTH_DATA_MASTER_KEY`. Run `./systemUp.sh <instance>`: the servers read keys wrapped by either.
-2. Rewrap the keys from the API container: `docker exec maestroApi-<instance> npm run health:rewrap-keys`. A second run reports 0.
+2. Rewrap the keys from the API container: `docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/rewrapHealthDataKeys.js`. A second run reports 0.
 3. Empty `HEALTH_DATA_MASTER_KEY_PREVIOUS` and run `./systemUp.sh <instance>` again. Keep the old key with the backups taken before step 2.
 
 ## Managing running services
@@ -319,7 +319,7 @@ docker build -f apps/sinfonia/Dockerfile \
 
 `systemUp.sh` copies `apps/deploy.dockerignore` to `deploy/<instance>/.dockerignore` so git metadata and `node_modules` are not sent as build context. Vite `ARG`s are applied after `npm install`, so core/public/dyeus share dependency layers and only the Vite step differs.
 
-**Deploy gate (D07/D08):** an image builds only if the modules in its context type-check and pass their tests: armonia `build` + tests in both images, maestro `tsc --noEmit` + vitest (in-memory MongoDB, Ubuntu 22.04 build, cached), sinfonia `typecheck` + vitest once per deploy (before the app `ARG`, so all app images share it). Maestro tests take their settings from `vitest.config.ts` and `maestro/.env.test` (no secrets; the only `.env*` file the build context keeps). The sinfonia `vite build` needs about 6 GB of memory.
+**Deploy gate (D07/D08):** an image builds only if the modules in its context type-check and pass their tests: armonia `build` + tests in both images, maestro `tsc` emit (`tsconfig.build.json`, D106) + vitest (in-memory MongoDB, Ubuntu 22.04 build, cached), sinfonia `typecheck` + vitest once per deploy (before the app `ARG`, so all app images share it). Maestro tests take their settings from `vitest.config.ts` and `maestro/.env.test` (no secrets; the only `.env*` file the build context keeps). The sinfonia `vite build` needs about 6 GB of memory.
 
 `systemUp.sh` builds whichever clients were selected in `./deploy.sh`. Override naming with:
 
