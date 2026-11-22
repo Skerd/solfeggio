@@ -251,6 +251,7 @@ Each instance's Maestro environment is managed through `apps/maestro/instances/<
 - `KAFKA_*` — brokers, SASL credentials, CA path, and the `<instance>-` prefix on topics and consumer groups (when Kafka is enabled)
 - `REDIS_*` — root nodes, auth, and the instance's logical database (when Redis is enabled)
 - `CLAMAV_*` — host/port (when ClamAV is enabled)
+- `CONTENT_MODERATION` — the on-server nudity check of uploaded images, videos and the pictures in PDFs and Office files (D177; videos are sampled with the image's ffmpeg, PDF pages rendered with its Ghostscript): `local` (default) or `off`; `CONTENT_MODERATION_*_SCORE` tune its limits. After a first deploy of the check, run the stored-file check once (see Operator scripts) to flag explicit files stored before it
 - `CLIENT_HOST` — public origin of the **core/panel** SPA (auth emails, Stripe). Derived from the selected `core` client's domain in host mode (`https://panel.pronix.al`). Never `localhost` or the Docker-internal gateway. Left unchanged when no public origin exists (path mode without a real domain).
 - `SINFONIA_CLIENT_URLS` — per-app map written from the same selection, e.g. `core=https://panel.pronix.al,public=https://pronix.al,dyeus=https://dyeus.al`. Maestro uses this so shop/public/panel mail links hit the matching SPA. `CLIENT_NAME` is left as-is.
 - `PORTAL_ROOT_DOMAIN` — apex of the portal zone (`arpeggio.al`), served by the `portal` client (`portal@arpeggio.al|*.arpeggio.al` in the client selection; its image is built with this value, because the session cookie spans the zone). The apex lists every company that opted in; `{siteSlug}.arpeggio.al` is that company's own site, resolved from the host (reserved labels such as `panel` and `www` are not company sites). One sign-in covers the whole zone, and portal accounts belong to the platform-owner company. On the apex, a page about one company names it in the `x-site-company` header. Optional: empty means no portal. Put zone hosts on no company's `allowedDomains`.
@@ -307,6 +308,8 @@ docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/replay
 docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/syncDemoCompanies.js
 # Rewrap health-data keys after a master-key change (npm run health:rewrap-keys; see above)
 docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/rewrapHealthDataKeys.js
+# Run the nudity check (D177) over stored videos and images it has not judged: flag only, --dry-run first (npm run media:moderate-existing)
+docker exec maestroApi-<instance> node -r tsconfig-paths/register scripts/moderateExistingMedia.js --types=video,image,pdf,document [--dry-run]
 ```
 
 ## Image build context
