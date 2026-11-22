@@ -102,6 +102,20 @@ get_user_input() {
         print_status "Using CLAMD_MAXTHREADS from environment variable: $clamd_maxthreads"
     fi
 
+    # clamd's own limits (100 MB by default) must cover the largest upload (Maestro MAX_FILE_SIZE), or bigger files
+    # are refused, or with a larger stream limit skipped unscanned.
+    if [ -z "$CLAMAV_MAX_FILE_SIZE_MB" ]; then
+        clamav_max_file_size_mb=500
+        print_status "Using default CLAMAV_MAX_FILE_SIZE_MB: $clamav_max_file_size_mb"
+    else
+        clamav_max_file_size_mb="$CLAMAV_MAX_FILE_SIZE_MB"
+        if ! validate_number "$clamav_max_file_size_mb" 1 2000; then
+            print_error "CLAMAV_MAX_FILE_SIZE_MB from .env must be between 1 and 2000 (ClamAV cannot scan files over 2 GB)"
+            exit 1
+        fi
+        print_status "Using CLAMAV_MAX_FILE_SIZE_MB from environment variable: $clamav_max_file_size_mb"
+    fi
+
     if [ -z "$CLAMAV_SCAN_MOUNT" ]; then
         scan_mount=""
         print_status "No scan directory mount configured"
@@ -128,6 +142,7 @@ get_user_input() {
     print_status "- ClamAV image: ${GREEN}$clamav_image${NC}"
     print_status "- FRESHCLAM_CHECKS: ${GREEN}$freshclam_checks${NC}"
     print_status "- CLAMD_MAXTHREADS: ${GREEN}$clamd_maxthreads${NC}"
+    print_status "- CLAMAV_MAX_FILE_SIZE_MB: ${GREEN}$clamav_max_file_size_mb${NC}"
     print_status "- Scan mount directory: ${GREEN}${scan_mount:-"None"}${NC}"
     if [ "$num_nodes" -gt 1 ]; then
         print_status "- Node ports: ${GREEN}$(for i in $(seq 1 $num_nodes); do echo -n "$((clamav_port + i - 1))"; if [ $i -lt $num_nodes ]; then echo -n ", "; fi; done)${NC}"
@@ -151,6 +166,7 @@ generate_docker_compose() {
     local freshclam_checks=$4
     local clamd_maxthreads=$5
     local scan_mount=$6
+    local clamav_max_file_size_mb=$7
 
     print_status "Generating docker-compose.yml..."
 
@@ -183,7 +199,17 @@ EOF
         cat >> docker-compose.yml << EOF
     environment:
       FRESHCLAM_CHECKS: ${freshclam_checks}
-      CLAMD_MAXTHREADS: ${clamd_maxthreads}
+      # The image writes CLAMD_CONF_<Option> into clamd.conf at start.
+      CLAMD_CONF_MaxThreads: ${clamd_maxthreads}
+      # An upload up to the limit is scanned whole; a bigger one is refused (INSTREAM size limit), and so is an archive whose
+      # contents pass MaxScanSize (Heuristics.Limits.Exceeded). ClamAV scans only the first MaxFileSize of a single larger
+      # file inside an archive.
+      CLAMD_CONF_StreamMaxLength: ${clamav_max_file_size_mb}M
+      CLAMD_CONF_MaxFileSize: ${clamav_max_file_size_mb}M
+      CLAMD_CONF_MaxScanSize: $((clamav_max_file_size_mb * 2))M
+      CLAMD_CONF_AlertExceedsMax: "yes"
+      # Office 97-2003 macros, incl. PowerPoint's, which Maestro's own Office check cannot see.
+      CLAMD_CONF_AlertOLE2Macros: "yes"
     networks:
       - arpeggio-internal
     healthcheck:
@@ -480,7 +506,7 @@ main() {
     NUM_NODES=$num_nodes
     BASE_PORT=$clamav_port
 
-    generate_docker_compose "$NUM_NODES" "$BASE_PORT" "$clamav_image" "$freshclam_checks" "$clamd_maxthreads" "$scan_mount"
+    generate_docker_compose "$NUM_NODES" "$BASE_PORT" "$clamav_image" "$freshclam_checks" "$clamd_maxthreads" "$scan_mount" "$clamav_max_file_size_mb"
     generate_setup_scripts "$NUM_NODES" "$BASE_PORT"
 
     echo -e "${GREEN}================================================================${NC}"
