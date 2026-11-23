@@ -751,6 +751,15 @@ restart_nginx_gateway() {
 generate_servers_compose() {
     print_status "Generating servers compose file: ${SERVERS_COMPOSE_FILE}"
 
+    # The portal's page heads (D181) read the portal app's own index.html inside the network.
+    local portal_environment="" i
+    for i in "${!SINFONIA_APP_IDS[@]}"; do
+        if [ "${SINFONIA_APP_IDS[$i]}" = "portal" ]; then
+            portal_environment="    environment:
+      - PORTAL_INDEX_HTML_URL=http://${SINFONIA_APP_CONTAINERS[$i]}/index.html"
+        fi
+    done
+
     cat > "$SERVERS_COMPOSE_FILE" <<EOF
 version: '3.8'
 
@@ -763,6 +772,7 @@ services:
     command: ["npm", "run", "api"]
     env_file:
       - ./maestro/.env
+${portal_environment}
     volumes:
       - ./maestro/secrets:/maestro/secrets:ro
     networks:

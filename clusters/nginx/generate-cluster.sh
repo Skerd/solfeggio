@@ -451,9 +451,10 @@ EOF
 }
 
 # Maestro + SPA locations for a server block of the current gateway entry.
-# Args: frontend_upstream
+# Args: frontend_upstream [app_id]
 emit_gateway_server_locations() {
     local frontend_upstream=$1
+    local app_id=${2:-}
 
     cat <<EOF
     location /api/ {
@@ -488,8 +489,64 @@ emit_gateway_server_locations() {
     gzip_proxied any;
     gzip_types text/plain text/css application/javascript application/json application/wasm image/svg+xml;
 
+EOF
+    if [ "$app_id" = "portal" ]; then
+        emit_portal_page_locations "$frontend_upstream"
+        return
+    fi
+    cat <<EOF
     location / {
         proxy_pass http://${frontend_upstream};
+    }
+EOF
+}
+
+# The proxy headers again: a location that sets any proxy_set_header inherits none from its server block.
+emit_portal_api_headers() {
+    cat <<EOF
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Device-Id portal-gateway;
+EOF
+}
+
+# Portal pages (D181): the API fills each page's head (and a plain copy for crawlers) into the app's own index.html and
+# serves robots.txt and sitemap.xml per host. Files go straight to the app, and the app answers whenever the API cannot.
+# Args: frontend_upstream
+emit_portal_page_locations() {
+    local frontend_upstream=$1
+    cat <<EOF
+    location = /robots.txt {
+        rewrite ^ /api/portal/robots.txt break;
+        proxy_pass http://${GW_API_UPSTREAM};
+$(emit_portal_api_headers)
+    }
+
+    location = /sitemap.xml {
+        rewrite ^ /api/portal/sitemap.xml break;
+        proxy_pass http://${GW_API_UPSTREAM};
+$(emit_portal_api_headers)
+    }
+
+    # Scripts, styles, pictures: anything with a file extension outside the API.
+    location ~ ^/(?!api/|ws/).*\.[A-Za-z0-9]+\$ {
+        proxy_pass http://${frontend_upstream};
+    }
+
+    location / {
+        rewrite ^ /api/portal/page break;
+        proxy_pass http://${GW_API_UPSTREAM};
+$(emit_portal_api_headers)
+        proxy_set_header X-Original-URI \$request_uri;
+        proxy_intercept_errors on;
+        error_page 400 404 429 500 502 503 504 = @portal_app;
+    }
+
+    # The visitor's own address, not the API's it was rewritten to.
+    location @portal_app {
+        proxy_pass http://${frontend_upstream}\$request_uri;
     }
 EOF
 }
@@ -571,7 +628,7 @@ server {
 
 EOF
                     emit_server_proxy_settings
-                    emit_gateway_server_locations "${SINFONIA_APP_UPSTREAMS[$i]}"
+                    emit_gateway_server_locations "${SINFONIA_APP_UPSTREAMS[$i]}" "${SINFONIA_APP_IDS[$i]}"
                     cat <<EOF
 }
 
