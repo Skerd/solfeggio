@@ -210,8 +210,6 @@ EOF
     image: redis:7.2-alpine
     container_name: redis-master-${master_id}
     hostname: redis-master-${master_id}
-    ports:
-      - "127.0.0.1:$((redis_port + redis_counter - 1)):6379"
     command: redis-server /usr/local/etc/redis/redis.conf
     volumes:
       - ./scripts/redis-master-${master_id}.conf:/usr/local/etc/redis/redis.conf
@@ -236,8 +234,6 @@ EOF
     image: redis:7.2-alpine
     container_name: redis-replica-${master_id}-${replica_id}
     hostname: redis-replica-${master_id}-${replica_id}
-    ports:
-      - "127.0.0.1:$((redis_port + redis_counter - 1)):6379"
     command: redis-server /usr/local/etc/redis/redis.conf
     volumes:
       - ./scripts/redis-replica-${master_id}-${replica_id}.conf:/usr/local/etc/redis/redis.conf
@@ -274,8 +270,6 @@ EOF
     image: redis:7.2-alpine
     container_name: redis-sentinel-${sentinel_id}
     hostname: redis-sentinel-${sentinel_id}
-    ports:
-      - "127.0.0.1:$((sentinel_port + sentinel_id - 1)):26379"
     command: sh -c "${wait_masters_cmd}redis-sentinel /usr/local/etc/redis/sentinel.conf"
     volumes:
       - ./scripts/sentinel-${sentinel_id}.conf:/usr/local/etc/redis/sentinel.conf

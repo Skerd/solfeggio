@@ -186,8 +186,6 @@ EOF
     container_name: clamav-${i}
     hostname: clamav-${i}
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:${external_port}:3310"
     volumes:
       - clamav-${i}-data:/var/lib/clamav
 EOF

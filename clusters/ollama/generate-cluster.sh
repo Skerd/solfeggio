@@ -182,12 +182,6 @@ services:
     container_name: ${OLLAMA_HOST}
     hostname: ${OLLAMA_HOST}
     restart: unless-stopped
-    ports:
-      # Loopback only: Maestro reaches Ollama over the internal Docker network
-      # at http://${OLLAMA_HOST}:${OLLAMA_INTERNAL_PORT}. Publishing this on
-      # 0.0.0.0 would expose an unauthenticated inference endpoint to the
-      # internet on a public-IP host.
-      - "127.0.0.1:${ollama_port}:${OLLAMA_INTERNAL_PORT}"
     volumes:
       - ollama-data:/root/.ollama
     environment:
